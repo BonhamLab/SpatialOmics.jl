@@ -1,4 +1,4 @@
-abstract type AbstractRun end
+abstract type AbstractSlide end
 abstract type AbstractImageGroup end
 abstract type AbstractFieldOfView end
 
@@ -11,7 +11,7 @@ Expects a folder prepared by [`prepare_cosmx_experiment!`](@ref).
 
 ## Indexing
 
-Use string indexes to pull out individual [`Run`](@ref)s.
+Use string indexes to pull out individual [`Slide`](@ref)s.
 
 ```julia-repl
 julia> julia> ex = SO.Experiment("tlr78", "data/processed")
@@ -21,7 +21,7 @@ Experiment with 2 slides:
     mw_mus_p1_09
 
 julia> ex["mw_mus_p1_09"]
-Run mw_mus_p1_09 with 30 imagegroups and 191 FOVs
+Slide mw_mus_p1_09 with 30 imagegroups and 191 FOVs
 ```
 """
 mutable struct Experiment{T}
@@ -30,7 +30,7 @@ mutable struct Experiment{T}
     remote
     slides::LittleDict{String,T}
 
-    function Experiment{T}(name::String, base_path::String) where {T<:AbstractRun}
+    function Experiment{T}(name::String, base_path::String) where {T<:AbstractSlide}
         slides = Dict{String,T}()
         return new{T}(name, base_path, nothing, slides)
 
@@ -66,7 +66,7 @@ Base.dirname(ex::Experiment) = joinpath(ex.base_path, ex.name)
 
 
 """
-    struct Run{T}
+    struct Slide{T}
         name::String
         properties::LittleDict{String,Any}
         experiment::Experiment
@@ -84,28 +84,28 @@ using [`display_slide`](@ref) with Makie loaded
 to view [imagegroups](@ref ImageGroup) and their individual [FOVs](@ref FOV).
 
 """
-struct Run{T} <: AbstractSlide
+struct Slide{T} <: AbstractSlide
     name::String
-    experiment::Experiment
+    parent::Experiment
     properties::LittleDict
     positions::DataFrame
     transcripts::GroupedDataFrame
     imagegroups::LittleDict
 end
 
-Base.getindex(cs::Run, imagegroup_i) = cs.imagegroups[imagegroup_i]
+Base.getindex(cs::Slide, imagegroup_i) = cs.imagegroups[imagegroup_i]
 
-function Base.display(cs::Run)
+function Base.display(cs::Slide)
     nimagegroups = length(cs.imagegroups)
     nfovs = sum(g -> length(g.fovs), values(cs.imagegroups))
-    println("Run $(cs.name) with $nimagegroups imagegroups and $nfovs FOVs")
+    println("Slide $(cs.name) with $nimagegroups imagegroups and $nfovs FOVs")
 end
 
 
 """
     struct ImageGroup{T}
         id::Int16
-        slide::Run
+        parent::Slide
         fovs::Matrix{T}
     end
 
@@ -116,7 +116,7 @@ Most mutating methods applying to FOVs can also be performed on
 """
 struct ImageGroup{T} <: AbstractImageGroup
     id::Int16
-    slide::Run
+    parent::Slide
     fovs::Matrix{T}
 end
 
@@ -133,7 +133,7 @@ end
 """
     mutable struct FOV
         id::Int16
-        imagegroup::ImageGroup
+        parent::ImageGroup
         img::Union{Nothing, <:AbstractArray}
         thumbnail::Union{Nothing, <:AbstractArray}
     end
@@ -175,11 +175,11 @@ function ImageGroup(imagegroup_id, slide)
 end
 
 """
-    Run(slname, experiment)
+    Slide(slname, experiment)
 
-Constructor for [`Run`](@ref)
+Constructor for [`Slide`](@ref)
 """
-function Run(slname, experiment::Experiment)
+function Slide(slname, experiment::Experiment)
     experiment_path = dirname(experiment)
     slide_files = _slide_file_names(experiment_path, slname)
 
@@ -189,7 +189,7 @@ function Run(slname, experiment::Experiment)
 
     transcripts = groupby(Arrow.Table(slide_files.transcripts) |> DataFrame, "fov")
 
-    slide = Run{ImageGroup}(slname, experiment, properties, positions, transcripts, LittleDict{Any,ImageGroup}())
+    slide = Slide{ImageGroup}(slname, experiment, properties, positions, transcripts, LittleDict{Any,ImageGroup}())
 
     pos_imagegroups = groupby(positions, "imagegroup_id")
 
@@ -225,7 +225,7 @@ end
 function Experiment(exname::String, base_path::String)
     experiment_path = joinpath(base_path, exname)
     slnames = readdir(experiment_path)
-    experiment = Experiment{Run}(exname, base_path)
+    experiment = Experiment{Slide}(exname, base_path)
     @info slnames
     for slname in slnames
         slide_files = _slide_file_names(experiment_path, slname)
@@ -233,7 +233,7 @@ function Experiment(exname::String, base_path::String)
             @warn "Some required files missing for $slname, skipping"
             continue
         end
-        slide = Run(slname, experiment)
+        slide = Slide(slname, experiment)
         experiment[slname] = slide
     end
     return experiment
@@ -250,7 +250,7 @@ end
 Return the experiment name for any `XXX` data object
 
 - [`Experiment`](@ref)
-- [`Run`](@ref)
+- [`Slide`](@ref)
 - [`ImageGroup`](@ref)
 - [`FOV`](@ref)
 
@@ -258,7 +258,7 @@ For slides, imagegroups, or fovs, returns the parent experiment name.
 See also [`experiment_path`](@ref), [`slide_name`](@ref).
 """
 experiment_name(ex::Experiment) = ex.name
-experiment_name(sl::Run) = experiment_name(sl.experiment)
+experiment_name(sl::Slide) = experiment_name(sl.experiment)
 experiment_name(gr::ImageGroup) = experiment_name(gr.slide)
 experiment_name(fov::FOV) = experiment_name(fov.imagegroup)
 
@@ -269,7 +269,7 @@ experiment_name(fov::FOV) = experiment_name(fov.imagegroup)
 Return the relative path to the experiment for any `XXX` data object
 
 - [`Experiment`](@ref)
-- [`Run`](@ref)
+- [`Slide`](@ref)
 - [`ImageGroup`](@ref)
 - [`FOV`](@ref)
 
@@ -277,7 +277,7 @@ For slides, imagegroups, or fovs, returns the parent experiment path.
 See also [`slide_path`](@ref), [`imagegroups_path`](@ref).
 """
 experiment_path(ex::Experiment) = joinpath(ex.base_path, ex.name)
-experiment_path(sl::Run) = experiment_path(sl.experiment)
+experiment_path(sl::Slide) = experiment_path(sl.experiment)
 experiment_path(gr::ImageGroup) = experiment_path(gr.slide)
 experiment_path(fov::FOV) = experiment_path(fov.imagegroup)
 
@@ -287,7 +287,7 @@ experiment_path(fov::FOV) = experiment_path(fov.imagegroup)
 Return the relative path to the slide(s) for any `XXX` data object,
 
 - [`Experiment`](@ref)
-- [`Run`](@ref)
+- [`Slide`](@ref)
 - [`ImageGroup`](@ref)
 - [`FOV`](@ref)
 
@@ -296,7 +296,7 @@ For imagegroups, or fovs, returns the parent slide path.
 See also [`slide_path`](@ref), [`imagegroups_path`](@ref).
 """
 slide_path(ex::Experiment) = [slide_path(slide) for slide in values(ex.slides)]
-slide_path(sl::Run) = joinpath(experiment_path(sl), sl.name)
+slide_path(sl::Slide) = joinpath(experiment_path(sl), sl.name)
 slide_path(gr::ImageGroup) = slide_path(gr.slide)
 slide_path(fov::FOV) = slide_path(fov.imagegroup)
 
@@ -306,7 +306,7 @@ slide_path(fov::FOV) = slide_path(fov.imagegroup)
 Return the relative path to imagegroup images for any `XXX` data object
 
 - [`Experiment`](@ref)
-- [`Run`](@ref)
+- [`Slide`](@ref)
 - [`ImageGroup`](@ref)
 - [`FOV`](@ref)
 
@@ -317,7 +317,7 @@ For imagegroups or fovs, returns the path to imagegroups for the parent slide.
 See also [`fovs_path`](@ref), [`canonical_image_path`](@ref).
 """
 imagegroups_path(ex::Experiment) = [imagegroups_path(slide) for slide in values(ex.slides)]
-imagegroups_path(sl::Run) = joinpath(slide_path(sl), "imagegroups")
+imagegroups_path(sl::Slide) = joinpath(slide_path(sl), "imagegroups")
 imagegroups_path(gr::ImageGroup) = joinpath(slide_path(gr), "imagegroups")
 imagegroups_path(fov::FOV) = imagegroup_path(fov.imagegroup)
 
@@ -327,7 +327,7 @@ imagegroups_path(fov::FOV) = imagegroup_path(fov.imagegroup)
 Return the relative path to fov images for any `XXX` data object
 
 - [`Experiment`](@ref)
-- [`Run`](@ref)
+- [`Slide`](@ref)
 - [`ImageGroup`](@ref)
 - [`FOV`](@ref)
 
@@ -338,7 +338,7 @@ For imagegroups or fovs, returns the path to fovs for the parent slide.
 See also [`imagegroups_path`](@ref), [`canonical_image_path`](@ref).
 """
 fovs_path(ex::Experiment) = [fovs_path(slide) for slide in values(ex.slides)]
-fovs_path(sl::Run) = joinpath(slide_path(sl), "fovs")
+fovs_path(sl::Slide) = joinpath(slide_path(sl), "fovs")
 fovs_path(gr::ImageGroup) = joinpath(slide_path(gr), "fovs")
 fovs_path(fov::FOV) = joinpath(slide_path(fov), "fovs")
 
@@ -353,10 +353,10 @@ slide_names(ex::Experiment) = collect(keys(ex.slides))
 """
     slide_name(obj)
 
-Return the name of a [`Run`],
+Return the name of a [`Slide`],
 or the parent slide of a [`ImageGroup`](@ref) or [`FOV`](@ref).
 """
-slide_name(sl::Run) = sl.name
+slide_name(sl::Slide) = sl.name
 slide_name(gr::ImageGroup) = slide_name(gr.slide)
 slide_name(fov::FOV) = slide_name(fov.imagegroup)
 
@@ -378,7 +378,7 @@ fovs(gr::ImageGroup) = gr.fovs
 Return a transcripts table for any `XXX` data object
 other than an experiment.
 
-- [`Run`](@ref)
+- [`Slide`](@ref)
 - [`ImageGroup`](@ref)
 - [`FOV`](@ref)
 
@@ -402,11 +402,11 @@ julia> transcripts(imagegroup)[(; fov=24)]
                                                                                                                                     141819 rows omitted
 ```
 """
-transcripts(sl::Run) = sl.transcripts
+transcripts(sl::Slide) = sl.transcripts
 transcripts(gr::ImageGroup) = transcripts(gr.slide)[[(; fov) for fov in vec(fov_ids(gr)) if haskey(gr.slide, (; fov))]]
 transcripts(fov::FOV) = transcripts(fov.imagegroup.slide)[(; fov=fov.id)]
 
-positions(sl::Run) = sl.positions
+positions(sl::Slide) = sl.positions
 positions(gr::ImageGroup) = subset(positions(gr.slide), "imagegroup_id" => ByRow(==(imagegroup_name(gr))))
 positions(fov::FOV) = subset(positions(fov.imagegroup.slide), "fov" => ByRow(==(fov.id)))
 

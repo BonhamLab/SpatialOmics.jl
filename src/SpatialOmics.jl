@@ -1,6 +1,8 @@
 module SpatialOmics
 
 using DataStructures
+using DataFrames
+using Preferences
 using TOML
 
 # Write your package code here.
