@@ -8,7 +8,7 @@ makedocs(;
     authors="Kevin Bonham <kevin@bonham.ch> and contributors",
     sitename="SpatialOmics.jl",
     format=Documenter.HTML(;
-        canonical="https://kescobo.github.io/SpatialOmics.jl",
+        canonical="https://github.com/BonhamLab/SpatialOmics.jl",
         edit_link="main",
         assets=String[],
     ),
