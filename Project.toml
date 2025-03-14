@@ -1,0 +1,7 @@
+name = "SpatialOmics"
+uuid = "3e9708a6-d2bf-4005-a66d-2b9a8bfef56f"
+authors = ["Kevin Bonham <kevin@bonham.ch> and contributors"]
+version = "1.0.0-DEV"
+
+[compat]
+julia = "1.11"
