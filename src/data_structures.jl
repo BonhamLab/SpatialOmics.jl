@@ -1,5 +1,4 @@
 
-
 """
     AbstractROI
 
@@ -10,82 +9,101 @@ may have additional functionality and some special properties.
 
 Required Fields:
 
-- name: A string used to identify the ROI.
-  All ROI names within a slide must have unique names
-- parent: [`Slide`](@ref) that contains the ROI.
 - loc: Geometry (eg Point or Polygon) with coordinates in slide-space
-- props: Disk-written metadata dictionary for storing arbitrary information
 
 """
 abstract type AbstractROI end
 abstract type AbstractExperiment end
 abstract type AbstractSlide end
 
+"""
+    loc(roi::AbstractROI)
+
+Return the location of the ROI in slide-space.
+
+"""
+loc(roi::AbstractROI) = roi.loc
+
+"""
+    struct ROI <: AbstractROI
+        loc::Polygon{2} 
+    end
+
+"""
 struct ROI <: AbstractROI
-    name::String
-    parent::AbstractSlide
     loc::Polygon{2} 
-    props::DiskStore
 end
 
 """
     mutable struct FOV <: AbstractROI
-        parent::Slide
-        loc::Rectf{2} 
-        props::LittleDict{String,Any}
+        roi::ROI
+        img::DimArray
     end
 
 """
 mutable struct FOV <: AbstractROI
-    parent::AbstractSlide
-    loc::Rectf{2} 
-    props::DiskStore
+    roi::ROI
+    img::Union{Nothing, DimArray}
 end
 
+FOV(roi::ROI) = FOV(roi, nothing)
 
-function Base.display(fov::FOV)
-    sn = string(fov.parent.name)
-    println("FOV $(fov.name)  in slide $sn")
-end
+loc(fov::FOV) = loc(fov.roi)
+
+image(fov::FOV) = fov.img
+image!(fov::FOV, img) = (fov.img = img)
+size(fov::FOV) = size(fov.img)
+size(fov::FOV, args...) = size(fov.img, args...)
 
 """
     struct Slide
         parent::Experiment
         properties::LittleDict{String,Any}
-        rois::LittleDict{String,AbstractROI}
+        fovs::LittleDict{String,FOV}
+        rois::LittleDict{String,ROI}
     end
 
 Basic struct (type) containing information
 about an individual slide (eg one run through the machine).
-
 """
 struct Slide <: AbstractSlide
+    name::String
     parent::AbstractExperiment
     props::DiskStore
     fovs::LittleDict{String,FOV}
     rois::LittleDict{String,ROI}
-    
+
     function Slide(name, parent)
-        slidepath = joinpath(parent.base_path, name)
+        slidepath = joinpath(parent.base_path, "slides", name)
         props = _build_or_get_props(slidepath, name)
         fovs = LittleDict{String,FOV}()
         rois = LittleDict{String,ROI}()
-        return new(parent, props, fovs, rois)
+        return new(name, parent, props, fovs, rois)
     end
 end
 
+fov(slide::Slide, name) = getindex(slide.fovs, name)
+fovs(slide::Slide) = keys(slide.fovs)
+
+function fov!(slide::Slide, fov::FOV, name::String)
+    setindex!(slide.fovs, fov, name)
+end
+fov!(slide::Slide, fov::FOV) = setindex!(slide.fovs, fov, "FOV$(lpad(length(fovs(slide)) + 1, 4, '0'))")
+
 roi(slide::Slide, name) = getindex(slide.rois, name)
-rois(slide::Slide) = keys(slide.rois) 
+rois(slide::Slide) = keys(slide.rois)
+roi!(slide::Slide, name::String, roi::ROI) = setindex!(slide.rois, name, roi)
+roi!(slide::Slide, roi) = setindex!(slide.rois, "ROI$(lpad(length(rois(slide)) + 1, 3, '0'))", roi)
+
 
 property(slide::Slide, name) = getindex(slide.props, name)
 properties(slide::Slide) = keys(slide.props) 
 
 function Base.display(slide::Slide)
-    nrois = sum(g -> length(rois(slide)))
-    println("Slide $(slide.name) with $nrois ROIs")
+    nfovs = length(fovs(slide))
+    nrois = length(rois(slide))
+    println("Slide $(slide.name) with $nfovs FOVs and $nrois ROIs")
 end
-
-
 
 """
     Experiment(exname::String, base_path::String)
@@ -106,7 +124,7 @@ mutable struct Experiment <: AbstractExperiment
     function Experiment(name::String, base_path::String)
         props = _build_or_get_props(base_path, name)
         slides = Dict{String,Slide}()
-        return new(name, base_path, slides)
+        return new(name, base_path, slides, props)
 
     end
 end
@@ -135,5 +153,3 @@ Base.IteratorSize(ex::Experiment) = IteratorSize(ex.slides)
 Base.length(ex::Experiment) = length(ex.slides)
 Base.isdone(ex::Experiment) = isdone(ex.slides)
 Base.isdone(ex::Experiment, state) = isdone(ex.slides, state)
-
-

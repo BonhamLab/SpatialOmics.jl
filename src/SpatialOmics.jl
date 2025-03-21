@@ -1,5 +1,9 @@
 module SpatialOmics
 
+export fov,
+       fov!,
+       fovs
+
 using DataStructures
 using DataFrames
 using DimensionalData
@@ -17,8 +21,9 @@ import SQLite
 import DBInterface
 
 # Write your package code here.
-include("metadata.jl")
+include("datastores.jl")
 include("data_structures.jl")
+include("metadata.jl")
 include("io.jl")
 
 end
