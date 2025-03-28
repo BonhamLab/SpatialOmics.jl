@@ -17,11 +17,8 @@ using GeometryOps
 using GeometryBasics
 import GeoInterface
 
-import SQLite
-import DBInterface
 
 # Write your package code here.
-include("datastores.jl")
 include("data_structures.jl")
 include("metadata.jl")
 include("io.jl")
