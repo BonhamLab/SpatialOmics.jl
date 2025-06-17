@@ -61,6 +61,9 @@ struct Slide <: AbstractSlide
     rois::LittleDict{String,ROI}
 end
 
+function Slide(name::String, parent::AbstractExperiment)
+    return Slide(name, parent, LittleDict{String,Any}(), LittleDict{String,FOV}(), LittleDict{String,ROI}())
+end
 
 
 function Base.display(slide::Slide)
@@ -85,6 +88,12 @@ mutable struct Experiment <: AbstractExperiment
     slides::LittleDict{String,Slide}
     props::LittleDict{String,Any}
     Experiment(name::String) = new(name, nothing, LittleDict{String,Slide}(), LittleDict{String,Any}())
+end
+
+function Experiment(name::String, base_path::String)
+    ex = Experiment(name)
+    ex.base_path = base_path
+    return ex
 end
 
 function Base.display(ex::Experiment)

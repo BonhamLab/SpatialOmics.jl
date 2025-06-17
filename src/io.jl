@@ -1,4 +1,4 @@
-# # IO / File handlin
+# # IO / File handling
 #
 # ## Folder Structure
 #
@@ -20,8 +20,9 @@
 # │   │   │   │   ├── roi2.toml
 # │   │   │   │   ├── ...
 # │   │   │   ├── imgs/
-# │   │   │   │   ├── roi1.toml
-# │   │   │   │   ├── roi2.toml
+# │   │   │   │   ├── fov1.tif
+# │   │   │   │   ├── fov2.tif
+# │   │   │   │   ├── ...
 # │   │   ├── slide2
 # │   │   │   ├── etc...
 # ```
