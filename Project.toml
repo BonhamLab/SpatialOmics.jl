@@ -20,7 +20,7 @@ TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 [compat]
 DBInterface = "2.6.1"
 DataFrames = "1.7.0"
-DataStructures = "0.18.20"
+DataStructures = "0.18.20, 0.19"
 DimensionalData = "0.29.13"
 FileIO = "1.17.0"
 GeoInterface = "1.4.1"
