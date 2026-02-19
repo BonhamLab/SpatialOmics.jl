@@ -1,7 +1,7 @@
 name = "SpatialOmics"
 uuid = "3e9708a6-d2bf-4005-a66d-2b9a8bfef56f"
-authors = ["Kevin Bonham <kevin@bonham.ch> and contributors"]
 version = "0.1.0"
+authors = ["Kevin Bonham <kevin@bonham.ch> and contributors"]
 
 [deps]
 DBInterface = "a10d1c49-ce27-4219-8d33-6db1a4562965"
@@ -21,7 +21,7 @@ TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 DBInterface = "2.6.1"
 DataFrames = "1.7.0"
 DataStructures = "0.18.20"
-DimensionalData = "0.29.13"
+DimensionalData = "0.29.13, 0.30"
 FileIO = "1.17.0"
 GeoInterface = "1.4.1"
 GeometryBasics = "0.5.5"
