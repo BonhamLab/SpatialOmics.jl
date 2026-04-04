@@ -1,0 +1,3 @@
+# SpatialViz.jl
+
+SpatialViz.jl is the visualization framework of the STX_DEV Julia spatial transcriptomics ecosystem. It implements a multi-backend architecture built around the `VisualizationBackend` abstract type, with concrete backends for native Makie.jl (`MakieBackend`), browser-based WGLMakie/Bonito deployment (`WGLMakieBackend`/`BonitoBackend`), and Python Napari via PythonCall.jl (`NapariBackend`). The single public entry-point `spatial_plot()` handles all rendering across layers (points, images, labels, shapes) and backends; interactive tools for ROI selection, manual cell-type annotation, and colorblind-safe palettes are also provided. All backends depend on the `SpatialDataset` types from SpatialOmics.jl.

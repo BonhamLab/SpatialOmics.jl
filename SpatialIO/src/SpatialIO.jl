@@ -4,7 +4,7 @@
 Platform I/O layer for the STX_DEV spatial transcriptomics framework.
 Provides pluggable `PlatformReader` subtypes for Xenium, Visium, CosMx, and
 MERFISH vendor formats, plus round-trip interoperability with the Python
-SpatialData ecosystem via PythonCall.jl and native Zarr/HDF5/Arrow/Parquet
+SpatialData ecosystem via native Zarr/HDF5/Arrow/Parquet
 backends. All readers return `SpatialDataset` objects from SpatialOmicsBase.jl.
 
 ## Format-level I/O
@@ -30,7 +30,6 @@ using CSV
 using Parquet2
 using JSON3
 using Printf: @sprintf
-using PythonCall
 using CodecZstd
 using DiskArrays
 using SparseArrays
