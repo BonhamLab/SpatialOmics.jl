@@ -1,0 +1,30 @@
+{
+  "analysis_software_version": "2.0.0",
+  "cassette_barcode": "MOCK0000000000",
+  "cassette_name": "mock_xenium_cassette",
+  "cell_boundary_decoder": {
+    "algorithm": "jansen_rit",
+    "version": "1.0"
+  },
+  "date_of_acquisition": "2024-01-01T00:00:00.000000",
+  "experiment_id": "mock-xenium-experiment-000",
+  "instrument_id": "MOCK_INSTRUMENT_000",
+  "instrument_name": "Xenium Analyzer",
+  "num_cells": 0,
+  "num_panels": 1,
+  "num_transcripts": 0,
+  "panel": {
+    "genes": ["GAPDH", "ACTB", "MKI67", "CD3E", "CD20"],
+    "species": "Human",
+    "tissue": "mock_tissue"
+  },
+  "pixel_size": 0.2125,
+  "region_of_interest": {
+    "height_um": 1000.0,
+    "width_um": 1000.0,
+    "x_offset_um": 0.0,
+    "y_offset_um": 0.0
+  },
+  "run_name": "mock_xenium_run",
+  "schema_version": "3"
+}

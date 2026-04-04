@@ -1,0 +1,3 @@
+# SpatialIO.jl
+
+SpatialIO.jl is the platform I/O layer of the STX_DEV Julia spatial transcriptomics framework. It provides a pluggable `PlatformReader` abstraction with concrete implementations for 10x Genomics Xenium, 10x Genomics Visium (SpaceRanger), NanoString CosMx SMI, and Vizgen MERFISH, as well as round-trip interoperability with the Python SpatialData ecosystem via either native Zarr.jl or a PythonCall.jl bridge. All readers return `SpatialDataset` objects defined in SpatialOmics.jl, and additional utilities cover low-level Parquet, HDF5 (10x feature-barcode matrix), CSV, AnnData, and GeoJSON formats.

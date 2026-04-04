@@ -1,0 +1,13 @@
+name = "SpatialOmicsBase"
+uuid = "fc95849c-1493-4666-a0c4-8e4886e585c0"
+version = "0.1.0"
+authors = []
+
+[deps]
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+DiskArrays = "3c3547ce-8d99-4f5e-a174-61eb10b00ae3"
+
+[compat]
+DataFrames = "1.8.1"
+DiskArrays = "0.4.19"
+julia = "1.9"

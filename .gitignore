@@ -1,0 +1,43 @@
+# ─── Julia ────────────────────────────────────────────────────────────────────
+# Package Manifests are generated; libraries don't pin them.
+# Exception: docs/Manifest.toml is committed to pin the doc-build environment.
+**/Manifest.toml
+!docs/Manifest.toml
+
+# Coverage and memory-profiling artifacts
+*.jl.*.cov
+*.jl.cov
+*.jl.mem
+
+# Compiled system images
+*.so
+*.dylib
+*.dll
+
+# ─── Documentation ────────────────────────────────────────────────────────────
+docs/build/
+
+# ─── Python / CondaPkg ────────────────────────────────────────────────────────
+# CondaPkg tracks its own .pixi/ env in a nested .gitignore;
+# ignore the whole pixi env directory globally just in case.
+**/.CondaPkg/.pixi/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ─── Quarto / Jupyter ─────────────────────────────────────────────────────────
+.quarto/
+*_files/
+*.html
+*.ipynb_checkpoints/
+/.jupyter_cache/
+
+# ─── OS / Editor ──────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/
+.idea/

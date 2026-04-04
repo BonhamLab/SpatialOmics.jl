@@ -1,0 +1,6 @@
+DisplayName,CodeClass,ProbeID
+Gapdh,Endogenous,NA
+Actb,Endogenous,NA
+Mki67,Endogenous,NA
+NegControl01,Negative,NA
+SystemControl01,SystemControl,NA
