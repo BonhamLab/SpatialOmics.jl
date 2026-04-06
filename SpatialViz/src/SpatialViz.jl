@@ -1,68 +1,61 @@
 """
     SpatialViz.jl
 
-Visualization framework for the STX_DEV spatial transcriptomics ecosystem.
-Implements a multi-backend architecture dispatching on subtypes of
-`VisualizationBackend`: `MakieBackend` for native Julia static/interactive
-plots, `WGLMakieBackend` / `BonitoBackend` for browser-based deployment, and
-`NapariBackend` for Python Napari via PythonCall.jl.
+Makie-based visualization for the SpatialOmics ecosystem.
 
-The single public entry-point `spatial_plot()` handles all rendering; layer
-types, color maps, and interactivity options are controlled via keyword args.
+Extends Makie's `convert_arguments` to dispatch directly on SpatialOmicsBase
+element types — users plot spatial data with the same Makie verbs they already
+know (`heatmap`, `scatter`, `poly`, etc.).
+
+**Backend choice is left to the user.** Load a Makie backend *before* using
+SpatialViz:
+```julia
+using GLMakie      # native window, recommended for interactive exploration
+# or
+using CairoMakie   # static output, recommended for notebooks / publication
+# or
+using WGLMakie     # browser-based, for Pluto / Jupyter
+
+using SpatialViz
+```
+
+SpatialViz depends only on the abstract `Makie` package so it is
+backend-agnostic and will not pull in GL/WGL/Cairo deps itself.
+
+## Pyramid-aware image display
+`SpatialImage` objects that carry multi-resolution pyramid levels (loaded from
+OME-Zarr stores) are wrapped in `ImagePyramidSampler` and passed to
+`Makie.Resampler`, giving zoom-responsive lazy tile loading at no extra cost.
+
+## Coordinate-based selection
+`SpatialExtent` and `SpatialView` (from SpatialOmicsBase) can be used to crop
+elements before plotting — see the `crop` function.
 """
 module SpatialViz
 
 using Makie
-using WGLMakie
-using Bonito
-using PythonCall
+using GeometryBasics
 using SpatialOmicsBase
 
 # ---------------------------------------------------------------------------
-# Exports — backend types
+# Re-export key types users will need
 # ---------------------------------------------------------------------------
-
-export VisualizationBackend
-export MakieBackend, WGLMakieBackend, BonitoBackend, NapariBackend
-
-# ---------------------------------------------------------------------------
-# Exports — primary plotting API
-# ---------------------------------------------------------------------------
-
-export spatial_plot
-export plot_points, plot_image, plot_labels, plot_shapes
-export overlay_points_on_image
+export SpatialExtent, SpatialView, extent, intersects, crop
+export ImagePyramidSampler
 
 # ---------------------------------------------------------------------------
-# Exports — interactive annotation tools
+# Plotting helpers
 # ---------------------------------------------------------------------------
-
-export annotation_tool
-export roi_select, lasso_select, rectangle_select
-export save_annotations, load_annotations
+export spatial_image, spatial_image!
+export spatial_panel
 
 # ---------------------------------------------------------------------------
-# Exports — color utilities
+# Includes — one file per element type, plus composite helpers
 # ---------------------------------------------------------------------------
-
-export categorical_palette, continuous_colormap, colorblind_safe_palette
-
-# ---------------------------------------------------------------------------
-# Includes
-# ---------------------------------------------------------------------------
-
-include("backends/backends.jl")
-include("backends/makie_backend.jl")
-include("backends/wglmakie_backend.jl")
-include("backends/napari_backend.jl")
-include("plots/points.jl")
-include("plots/images.jl")
-include("plots/labels.jl")
-include("plots/shapes.jl")
-include("plots/overlay.jl")
-include("interactive/annotation.jl")
-include("interactive/roi.jl")
-include("colors/palettes.jl")
-include("spatial_plot.jl")
+include("recipes/image.jl")
+include("recipes/points.jl")
+include("recipes/shapes.jl")
+include("recipes/labels.jl")
+include("recipes/composite.jl")
 
 end # module SpatialViz

@@ -58,6 +58,17 @@ export CoordinateSystem, Transformation,
        AffineTransformation, IdentityTransformation,
        transform_coordinates, compose_transformations, invert_transformation
 
+# ── Spatial query primitives (exported) ───────────────────────────────────────
+
+import SpatialOmicsBase:
+    SpatialExtent, SpatialView,
+    extent, intersects, crop,
+    ImagePyramidSampler
+
+export SpatialExtent, SpatialView,
+       extent, intersects, crop,
+       ImagePyramidSampler
+
 # ── I/O — platform loaders (unexported, use `import SpatialOmics as SO`) ─────
 
 import SpatialIO:

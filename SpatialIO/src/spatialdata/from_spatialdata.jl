@@ -8,6 +8,7 @@
 using DataFrames
 using SparseArrays
 using Parquet2
+using GeometryBasics
 
 """
     from_spatialdata(zarr_path::String; use_python::Bool=false) -> SpatialDataset
@@ -104,6 +105,14 @@ function _read_sd_image(path::String)::SpatialImage
     level0_path = joinpath(path, "0")
     arr = ZarrV3Array(level0_path)
 
+    # Collect additional coarser pyramid levels (1, 2, 3, …)
+    pyramid = Any[]
+    level_idx = 1
+    while isdir(joinpath(path, string(level_idx)))
+        push!(pyramid, ZarrV3Array(joinpath(path, string(level_idx))))
+        level_idx += 1
+    end
+
     # Parse axes from NGFF multiscales metadata
     axes_meta = try
         meta.attributes.ome.multiscales[1].axes
@@ -112,7 +121,7 @@ function _read_sd_image(path::String)::SpatialImage
     end
     ax_nt = _axes_namedtuple(axes_meta)
 
-    return SpatialImage(arr, ax_nt, Dict{String,Any}("zarr_attrs" => meta))
+    return SpatialImage(arr, pyramid, ax_nt, Dict{String,Any}("zarr_attrs" => meta))
 end
 
 # ─── Labels reader ────────────────────────────────────────────────────────────
@@ -188,7 +197,10 @@ end
 # ─── Shapes reader ────────────────────────────────────────────────────────────
 #
 # Shapes are stored as a `shapes.parquet` file containing a `geometry` column
-# (WKB-encoded polygons/circles) plus optional attribute columns.
+# (WKB-encoded polygons) plus optional attribute columns.
+#
+# WKB geometry bytes are decoded inline to GeometryBasics.Polygon2 so that
+# SpatialViz can render them directly with poly!.
 #
 # TODO(perf): same eager-parquet issue as points — see note above.
 
@@ -201,16 +213,58 @@ function _read_sd_shapes(path::String)::SpatialShapes
 
     df = _read_parquet(parquet_path)
 
-    # Keep geometry column as raw bytes in `geometries` and the rest in features
     geom_col = "geometry"
-    geoms     = geom_col in names(df) ? df[:, geom_col] : Any[]
-    feat_df   = df[:, setdiff(names(df), [geom_col])]
+    geoms = if geom_col in names(df)
+        Any[_decode_wkb(bytes) for bytes in df[:, geom_col]]
+    else
+        Any[]
+    end
+    feat_df = df[:, setdiff(names(df), [geom_col])]
 
-    return SpatialShapes(
-        convert(Vector{Any}, geoms),
-        feat_df,
-        Dict{String,Any}("zarr_attrs" => meta),
-    )
+    return SpatialShapes(geoms, feat_df, Dict{String,Any}("zarr_attrs" => meta))
+end
+
+# ─── WKB decoder ──────────────────────────────────────────────────────────────
+#
+# Minimal inline WKB decoder supporting Polygon (type 3) and MultiPolygon (6).
+# Only little-endian byte order (0x01) is handled; big-endian returns nothing.
+# Z/M flags (0x80000000, 0x40000000) are stripped before type comparison.
+
+function _decode_wkb(bytes::Vector{UInt8})::Union{GeometryBasics.Polygon, Nothing}
+    isempty(bytes) && return nothing
+    io = IOBuffer(bytes)
+
+    byte_order = Base.read(io, UInt8)
+    byte_order == 0x01 || return nothing   # only little-endian supported
+
+    geom_type = ltoh(Base.read(io, UInt32)) & 0x0000FFFF   # strip Z/M/SRID flags
+    geom_type == UInt32(3) || return nothing                # we only decode Polygon
+
+    num_rings = Int(ltoh(Base.read(io, UInt32)))
+    num_rings == 0 && return nothing
+
+    # Exterior ring
+    exterior = _read_wkb_ring(io)
+
+    # Interior rings (holes)
+    holes = Vector{Vector{GeometryBasics.Point2f}}()
+    for _ in 2:num_rings
+        push!(holes, _read_wkb_ring(io))
+    end
+
+    isempty(exterior) && return nothing
+    return GeometryBasics.Polygon(exterior, holes)
+end
+
+function _read_wkb_ring(io::IOBuffer)
+    n = Int(ltoh(Base.read(io, UInt32)))
+    pts = Vector{GeometryBasics.Point2f}(undef, n)
+    for i in 1:n
+        x = Float32(ltoh(Base.read(io, Float64)))
+        y = Float32(ltoh(Base.read(io, Float64)))
+        pts[i] = GeometryBasics.Point2f(x, y)
+    end
+    return pts
 end
 
 # ─── Table (AnnData) reader ───────────────────────────────────────────────────

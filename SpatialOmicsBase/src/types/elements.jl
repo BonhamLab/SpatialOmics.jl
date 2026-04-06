@@ -20,17 +20,28 @@ A spatially-resolved image (e.g. DAPI, immunofluorescence, H&E).
 `data` supports lazy DiskArray / memory-mapped arrays so large images are
 never fully loaded into RAM unless explicitly requested.
 
+OME-Zarr images are stored in `(c, y, x)` axis order. Multi-resolution stores
+expose additional coarser levels via `pyramid` (finest = `data`, then coarser
+in `pyramid[1]`, `pyramid[2]`, …). Use `ImagePyramidSampler(img, channel)` to
+build a zoom-responsive sampler for `Makie.Resampler`.
+
 Fields
 ------
-- `data`     : AbstractArray{T, N} — the pixel data (supports DiskArray)
-- `axes`     : NamedTuple — spatial axes with units, e.g. `(x=..., y=...)`
+- `data`     : AbstractArray{T, N} — full-resolution pixel data (supports DiskArray)
+- `pyramid`  : Vector{Any} — coarser pyramid levels; empty if single-resolution
+- `axes`     : NamedTuple — spatial axes with units, e.g. `(c=..., y=..., x=...)`
 - `metadata` : Dict{String,Any}
 """
 struct SpatialImage{T} <: SpatialElement
     data::AbstractArray{T}
+    pyramid::Vector{Any}   # coarser-resolution levels, finest-excluded; may be DiskArrays
     axes::NamedTuple
     metadata::Dict{String,Any}
 end
+
+# Backward-compatible 3-arg constructor (no pyramid).
+SpatialImage(data::AbstractArray{T}, axes::NamedTuple, metadata::Dict{String,Any}) where T =
+    SpatialImage{T}(data, Any[], axes, metadata)
 
 # ---------------------------------------------------------------------------
 # SpatialPoints

@@ -35,6 +35,13 @@ export transform_coordinates, compose_transformations, invert_transformation
 # Metadata helpers
 export get_metadata, set_metadata!
 
+# Spatial query primitives
+export SpatialExtent, SpatialView
+export extent, intersects, crop
+
+# Pyramid sampler (for Makie.Resampler integration)
+export ImagePyramidSampler
+
 # ---------------------------------------------------------------------------
 # Includes (one file per logical group)
 # ---------------------------------------------------------------------------
@@ -43,6 +50,8 @@ include("types/elements.jl")
 include("types/coordinate_systems.jl")
 include("types/transformations.jl")
 include("types/dataset.jl")
+include("types/view.jl")
+include("types/pyramid.jl")
 include("transforms/affine.jl")
 include("utils/metadata.jl")
 include("utils/chunking.jl")
