@@ -23,9 +23,10 @@ An axis-aligned bounding box in a named coordinate system.
 
 # Constructors
 ```julia
-SpatialExtent{Float32}(0f0, 100f0, 0f0, 200f0, "global")
-SpatialExtent((0.0, 100.0), (0.0, 200.0))            # Float64, cs="global"
-SpatialExtent((0.0, 100.0), (0.0, 200.0), "slide_1")
+SpatialExtent(0, 100, 0, 200)                         # Float64, cs="global"
+SpatialExtent(0, 100, 0, 200, "slide_1")              # named coordinate system
+SpatialExtent{Float32}(0, 100, 0, 200, "global")      # explicit element type
+SpatialExtent((0.0, 100.0), (0.0, 200.0), "slide_1")  # tuple form
 ```
 """
 struct SpatialExtent{T<:AbstractFloat}
@@ -35,6 +36,13 @@ struct SpatialExtent{T<:AbstractFloat}
     ymax::T
     coordinate_system::String
 end
+
+# Convenience constructors — accept plain Real without explicit type suffix.
+# Untyped form defaults to Float64. Typed form SpatialExtent{T}(x,y,z,w) works
+# via the struct's inner constructor (which uses convert internally) — no outer
+# parametric wrapper needed (it would shadow the inner constructor and recurse).
+SpatialExtent(xmin::Real, xmax::Real, ymin::Real, ymax::Real, cs::String="global") =
+    SpatialExtent{Float64}(Float64(xmin), Float64(xmax), Float64(ymin), Float64(ymax), cs)
 
 # Tuple-based convenience constructors
 SpatialExtent(x::Tuple{Real,Real}, y::Tuple{Real,Real}, cs::String="global") =

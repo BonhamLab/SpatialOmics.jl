@@ -3,64 +3,57 @@
 # ImagePyramidSampler — a callable AbstractMatrix wrapper for pre-built image
 # pyramid levels (e.g. from OME-Zarr multiscales storage).
 #
-# Designed to be used with Makie.Resampler for zoom-responsive display:
+# Axis convention
+# ───────────────
+# OME-Zarr / Julia image convention:  level array has shape (height, width)
+#                                     i.e. (ny, nx) = (rows, cols).
 #
-#   sampler = ImagePyramidSampler(img, channel=1)
-#   heatmap(x_range, y_range, Makie.Resampler(sampler))
+# Makie heatmap convention:           data[i, j] renders at (xs[i], ys[j]),
+#                                     so dim 1 → x (horizontal, cols) and
+#                                     dim 2 → y (vertical, rows).
 #
-# Makie.Resampler detects the callable interface via:
-#   applicable(sampler, ::LinRange, ::LinRange)  →  true
-# and will call sampler(x_index_range, y_index_range) on every zoom change,
-# where both ranges are in the finest level's index space (1..N).
-#
-# Contrast with Makie.Pyramid, which builds levels eagerly from a single matrix
-# using ImageBase.restrict(). ImagePyramidSampler accepts pre-computed levels
-# (typically DiskArray-backed ZarrV3Arrays) and only loads the visible tile
-# at the selected resolution on each render update.
+# Therefore:
+#   • levels are stored (ny, nx) — natural image layout.
+#   • Base.size reports (nx, ny)  — Makie sees the correct landscape shape.
+#   • The callable receives x_range (col coords) and y_range (row coords),
+#     maps them to column and row indices respectively, then returns
+#     permutedims(level[ri, ci])  →  (len_x, len_y) for Makie.
 
 """
     ImagePyramidSampler{T}
 
-A zoom-responsive image sampler wrapping pre-built pyramid levels.
+A zoom-responsive image sampler wrapping pre-built OME-Zarr pyramid levels.
 
-Implements `AbstractMatrix{T}` so that Makie treats it as image data, and is
-callable as `sampler(x::LinRange, y::LinRange)` so that `Makie.Resampler` uses
-the pyramid path (level selection based on step size) rather than the fallback
-interpolation path.
+Implements `AbstractMatrix{T}` with `size = (nx, ny)` (Makie heatmap convention)
+and is callable as `sampler(x::LinRange, y::LinRange)` so that `Makie.Resampler`
+selects the correct pyramid level on each zoom/pan event. Only the visible tile
+at the chosen resolution is loaded from disk.
 
-Levels are stored finest-first. Each level is a 2-D array `(ny, nx)` — a
-single channel slice from the source OME-Zarr (c, y, x) volume.
+Levels are stored internally as `(ny, nx)` 2-D slices (one channel from the
+source OME-Zarr `(c, y, x)` volume), finest first.
 
 # Construction
 ```julia
-# From a SpatialImage with pyramid levels loaded
-sampler = ImagePyramidSampler(img)           # channel 1
-sampler = ImagePyramidSampler(img, 2)        # channel 2
+sampler = ImagePyramidSampler(img)       # channel 1 (default)
+sampler = ImagePyramidSampler(img, 2)    # channel 2
 ```
 """
 struct ImagePyramidSampler{T} <: AbstractMatrix{T}
-    # Vector of 2-D arrays (ny × nx), finest [1] → coarsest [end].
-    # Element type is Any to accommodate heterogeneous DiskArray concrete types.
+    # Stored (ny, nx): levels[1] is finest, levels[end] is coarsest.
+    # Vector{Any} to accommodate heterogeneous DiskArray concrete types.
     levels::Vector{Any}
 end
 
 """
     ImagePyramidSampler(img::SpatialImage, channel::Int=1) -> ImagePyramidSampler
 
-Build a sampler from a `SpatialImage`, selecting `channel` (1-based) from
-the c-axis. Images are expected in OME-Zarr (c, y, x) layout; single-channel
-2-D images are also accepted.
+Slice `channel` from each pyramid level of `img` (OME-Zarr `(c, y, x)` layout).
+The slice is a lazy `view` — no pixel data is loaded until the sampler is called.
 """
 function ImagePyramidSampler(img::SpatialImage{T}, channel::Int=1) where T
-    function _slice(arr)
-        if ndims(arr) == 3
-            return view(arr, channel, :, :)   # lazy: only loads on indexing
-        elseif ndims(arr) == 2
-            return arr
-        else
-            error("ImagePyramidSampler: expected 2-D or 3-D array, got $(ndims(arr))-D")
-        end
-    end
+    _slice(arr) = ndims(arr) == 3 ? view(arr, channel, :, :) :   # (ny, nx) view
+                  ndims(arr) == 2 ? arr :
+                  error("ImagePyramidSampler: expected 2-D or 3-D array, got $(ndims(arr))-D")
     levels = Any[_slice(img.data)]
     for lvl in img.pyramid
         push!(levels, _slice(lvl))
@@ -68,70 +61,78 @@ function ImagePyramidSampler(img::SpatialImage{T}, channel::Int=1) where T
     return ImagePyramidSampler{T}(levels)
 end
 
-# AbstractMatrix interface — report the finest level's size so that Makie
-# creates correct data-coordinate ranges for the heatmap.
-Base.size(s::ImagePyramidSampler) = size(s.levels[1])
+# ── AbstractMatrix interface ───────────────────────────────────────────────────
+# Report (nx, ny) so Makie creates correct (width × height) axis ranges.
+# Internally levels are (ny, nx), so we swap.
+function Base.size(s::ImagePyramidSampler)
+    ny, nx = size(s.levels[1])
+    return (nx, ny)
+end
 
-# Scalar indexing into the finest level (used by Makie for fallback / limits).
-Base.getindex(s::ImagePyramidSampler, i::Int, j::Int) = s.levels[1][i, j]
+# Scalar getindex: transpose access into the (ny, nx) finest level.
+Base.getindex(s::ImagePyramidSampler, i::Int, j::Int) = s.levels[1][j, i]
+
+# ── Callable interface for Makie.Resampler ────────────────────────────────────
 
 """
     (s::ImagePyramidSampler)(x::LinRange, y::LinRange) -> Matrix
 
-Called by `Makie.Resampler` on every zoom change.
+Called by `Makie.Resampler` on every zoom/pan event.
 
-`x` and `y` are index ranges in the *finest-level* coordinate space (1..N).
-The step sizes reflect the current zoom: large steps = zoomed out = select a
-coarser level; small steps = zoomed in = select the finest level.
+`x` is a range of column (x / horizontal) indices in the finest-level space
+`[1..nx]`; `y` is a range of row (y / vertical) indices in `[1..ny]`.
 
-Returns a materialized matrix of size `(length(x), length(y))` drawn from
-the best-matching pyramid level.
+Step size encodes zoom level: large step → coarser level; small step → finer.
+
+Returns a `(length(x), length(y))` matrix — Makie places `result[i,j]` at
+data coordinate `(x[i], y[j])`.
 """
 function (s::ImagePyramidSampler)(x::LinRange, y::LinRange)
     xstep, ystep = step(x), step(y)
-    finest_sz = size(s.levels[1])
+    # finest level size in (nx, ny) terms (same convention as Base.size)
+    finest_nx, finest_ny = size(s)
 
-    # For each level, compute the step size in finest-level coordinates.
-    # Level k with size (nr_k, nc_k) has pixel step sizes:
-    #   (finest_nr / nr_k,  finest_nc / nc_k)
-    # Pick the level whose step size is closest to the requested (xstep, ystep).
-    best_idx = 1
+    # Select the pyramid level whose pixel step best matches the requested zoom.
+    # For a level stored as (ny_k, nx_k):
+    #   col pixel step = finest_nx / nx_k  (in finest-level x/col coordinates)
+    #   row pixel step = finest_ny / ny_k  (in finest-level y/row coordinates)
+    best_idx  = 1
     best_dist = Inf
     for (i, lvl) in enumerate(s.levels)
-        sz = size(lvl)
-        px_step_x = finest_sz[1] / sz[1]
-        px_step_y = finest_sz[2] / sz[2]
-        dist = hypot(px_step_x - xstep, px_step_y - ystep)
+        ny_k, nx_k = size(lvl)
+        dist = hypot(finest_nx / nx_k - xstep, finest_ny / ny_k - ystep)
         if dist < best_dist
             best_dist = dist
-            best_idx = i
+            best_idx  = i
         end
     end
 
-    level = s.levels[best_idx]
-    nr, nc = size(level)
-    finest_nr, finest_nc = finest_sz
+    level      = s.levels[best_idx]
+    ny_k, nx_k = size(level)
 
-    # Map from finest-level index ranges to this level's index space.
-    # finest index i maps to level index: (i-1)*(nr-1)/(finest_nr-1) + 1
-    if finest_nr == nr
-        ri = clamp.(round.(Int, collect(x)), 1, nr)
-    else
-        scale_r = (nr - 1) / (finest_nr - 1)
-        ri = clamp.(round.(Int, (collect(x) .- 1) .* scale_r .+ 1), 1, nr)
-    end
-    if finest_nc == nc
-        ci = clamp.(round.(Int, collect(y)), 1, nc)
-    else
-        scale_c = (nc - 1) / (finest_nc - 1)
-        ci = clamp.(round.(Int, (collect(y) .- 1) .* scale_c .+ 1), 1, nc)
-    end
+    # Map x (col range in finest coords [1..nx]) → column indices in this level.
+    ci = _scale_range(x, finest_nx, nx_k)
 
-    # Materialize just this tile from the (possibly disk-backed) level array.
-    return level[ri, ci]
+    # Map y (row range in finest coords [1..ny]) → row indices in this level.
+    ri = _scale_range(y, finest_ny, ny_k)
+
+    # level[ri, ci] is (length(y), length(x)); transpose → (length(x), length(y)).
+    return permutedims(level[ri, ci])
+end
+
+# Scale a LinRange from finest-level coordinates [1..finest_N] to level
+# coordinates [1..level_N], returning a clamped integer index vector.
+function _scale_range(r::LinRange, finest_N::Int, level_N::Int)::Vector{Int}
+    if finest_N == level_N
+        return clamp.(round.(Int, collect(r)), 1, level_N)
+    else
+        scale = (level_N - 1) / (finest_N - 1)
+        return clamp.(round.(Int, (collect(r) .- 1) .* scale .+ 1), 1, level_N)
+    end
 end
 
 function Base.show(io::IO, s::ImagePyramidSampler{T}) where T
-    szs = [size(lvl) for lvl in s.levels]
-    print(io, "ImagePyramidSampler{$T}($(length(s.levels)) levels: $szs)")
+    nx, ny = size(s)
+    szs = ["($(size(lvl,2))×$(size(lvl,1)))" for lvl in s.levels]
+    print(io, "ImagePyramidSampler{$T}($nx×$ny px, $(length(s.levels)) levels: $(join(szs, ", ")))")
 end

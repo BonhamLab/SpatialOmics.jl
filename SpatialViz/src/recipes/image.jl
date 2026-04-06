@@ -41,12 +41,12 @@ end
 # ---------------------------------------------------------------------------
 
 function Makie.convert_arguments(P::Type{<:Heatmap}, s::ImagePyramidSampler)
-    ny, nx = size(s)
+    nx, ny = size(s)   # size(s) = (nx, ny) — Makie heatmap convention
     return ((1f0, Float32(nx)), (1f0, Float32(ny)), s)
 end
 
 function Makie.convert_arguments(P::Type{<:Heatmap}, x, y, s::ImagePyramidSampler)
-    ny, nx = size(s)
+    nx, ny = size(s)   # size(s) = (nx, ny) — Makie heatmap convention
     return ((1f0, Float32(nx)), (1f0, Float32(ny)), s)
 end
 
