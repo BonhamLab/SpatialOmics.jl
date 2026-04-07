@@ -40,13 +40,13 @@ using SpatialOmicsBase
 # ---------------------------------------------------------------------------
 # Re-export key types users will need
 # ---------------------------------------------------------------------------
-export SpatialExtent, SpatialView, extent, intersects, crop
+export SpatialExtent, SpatialElementView, SpatialDatasetView
+export extent, intersects, crop
 export ImagePyramidSampler
 
 # ---------------------------------------------------------------------------
 # Plotting helpers
 # ---------------------------------------------------------------------------
-export spatial_image, spatial_image!
 export spatial_panel
 
 # ---------------------------------------------------------------------------

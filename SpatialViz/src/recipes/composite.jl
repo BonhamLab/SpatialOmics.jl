@@ -18,7 +18,7 @@
                   shapes_color=:transparent,
                   shapes_strokecolor=:white,
                   shapes_strokewidth=0.5,
-                  view::Union{SpatialView,Nothing}=nothing,
+                  view::Union{SpatialDatasetView,Nothing}=nothing,
                   kwargs...)
 
 Create a `Figure` with a single `Axis` showing the requested layers from `ds`.
@@ -41,7 +41,7 @@ function spatial_panel(
     shapes_color                      = :transparent,
     shapes_strokecolor                = :white,
     shapes_strokewidth::Real          = 0.5,
-    view::Union{SpatialView,Nothing}  = nothing,
+    view::Union{SpatialDatasetView,Nothing} = nothing,
     figure_kwargs                     = (;),
     axis_kwargs                       = (;),
     kwargs...,
@@ -52,7 +52,7 @@ function spatial_panel(
     # --- image layer ---
     if image_key !== nothing && haskey(ds.images, image_key)
         img = ds.images[image_key]
-        spatial_image!(ax, img; channel=channel, colormap=image_colormap)
+        heatmap!(ax, img; channel=channel, colormap=image_colormap)
     end
 
     # --- labels layer ---
@@ -62,10 +62,7 @@ function spatial_panel(
 
     # --- shapes layer ---
     if shapes_key !== nothing && haskey(ds.shapes, shapes_key)
-        shp = ds.shapes[shapes_key]
-        if view !== nothing && view.extent !== nothing
-            shp = crop(shp, view.extent)
-        end
+        shp = view !== nothing ? view.shapes[shapes_key] : ds.shapes[shapes_key]
         poly!(ax, shp;
               color=shapes_color,
               strokecolor=shapes_strokecolor,
@@ -74,16 +71,20 @@ function spatial_panel(
 
     # --- points layer ---
     if points_key !== nothing && haskey(ds.points, points_key)
-        pts = ds.points[points_key]
-        if view !== nothing && view.extent !== nothing
-            pts = crop(pts, view.extent)
-        end
+        pts = view !== nothing ? view.points[points_key] : ds.points[points_key]
         scatter!(ax, pts;
                  color=points_color,
                  markersize=points_markersize)
     end
 
-    tightlimits!(ax)
+    # Constrain axis to the view extent when one is provided; otherwise fit all layers.
+    if view !== nothing
+        e = view.extent
+        limits!(ax, e.xmin, e.xmax, e.ymin, e.ymax)
+    else
+        tightlimits!(ax)
+    end
+
     return fig, ax
 end
 

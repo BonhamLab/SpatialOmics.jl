@@ -61,11 +61,13 @@ export CoordinateSystem, Transformation,
 # ── Spatial query primitives (exported) ───────────────────────────────────────
 
 import SpatialOmicsBase:
-    SpatialExtent, SpatialView,
+    SpatialExtent,
+    SpatialElementView, SpatialDatasetView,
     extent, intersects, crop,
     ImagePyramidSampler
 
-export SpatialExtent, SpatialView,
+export SpatialExtent,
+       SpatialElementView, SpatialDatasetView,
        extent, intersects, crop,
        ImagePyramidSampler
 

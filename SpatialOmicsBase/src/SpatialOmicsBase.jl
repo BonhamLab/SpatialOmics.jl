@@ -36,7 +36,8 @@ export transform_coordinates, compose_transformations, invert_transformation
 export get_metadata, set_metadata!
 
 # Spatial query primitives
-export SpatialExtent, SpatialView
+export SpatialExtent
+export SpatialElementView, SpatialDatasetView
 export extent, intersects, crop
 
 # Pyramid sampler (for Makie.Resampler integration)

@@ -6,6 +6,15 @@
 #   scatter(pts)                         # plain scatter, no color
 #   scatter(pts; color=pts.features.gene)  # color by a feature column
 
+# View dispatch — crop is applied lazily at render time.
+function Makie.convert_arguments(P::Type{<:Scatter}, v::SpatialElementView{<:SpatialPoints})
+    return Makie.convert_arguments(P, crop(v.parent, v.extent))
+end
+
+function Makie.convert_arguments(P::Type{<:Lines}, v::SpatialElementView{<:SpatialPoints})
+    return Makie.convert_arguments(P, crop(v.parent, v.extent))
+end
+
 """
     Makie.convert_arguments(P, pts::SpatialPoints)
 

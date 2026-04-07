@@ -84,26 +84,49 @@ function _image_to_heatmap_args(P, img::SpatialImage, channel::Int)
 end
 
 # ---------------------------------------------------------------------------
-# spatial_image — thin helper that respects channel kwarg
+# heatmap overloads — SpatialElementView{SpatialImage} (view with extent)
+#
+# Renders the full image (Resampler selects the right pyramid level) then
+# constrains the axis to the view extent, so the caller sees only that region.
+# ---------------------------------------------------------------------------
+
+function Makie.heatmap!(ax, v::SpatialElementView{<:SpatialImage}; channel::Int=1, kwargs...)
+    result = heatmap!(ax, v.parent; channel=channel, kwargs...)
+    e = v.extent
+    limits!(ax, e.xmin, e.xmax, e.ymin, e.ymax)
+    return result
+end
+
+function Makie.heatmap(v::SpatialElementView{<:SpatialImage}; channel::Int=1, kwargs...)
+    result = heatmap(v.parent; channel=channel, kwargs...)
+    e = v.extent
+    limits!(result[2], e.xmin, e.xmax, e.ymin, e.ymax)
+    return result
+end
+
+# ---------------------------------------------------------------------------
+# heatmap overloads — dispatch on SpatialImage with channel kwarg
 # ---------------------------------------------------------------------------
 
 """
-    spatial_image(img::SpatialImage; channel::Int=1, kwargs...)
+    heatmap(img::SpatialImage; channel::Int=1, kwargs...)
+    heatmap!(ax, img::SpatialImage; channel::Int=1, kwargs...)
 
-Return a `(Figure, Axis, plot)` tuple showing `img` in a new figure.
-This thin wrapper exists only to allow `channel` selection; for compositing
-with other layers use the `convert_arguments` dispatch directly.
+Plot a `SpatialImage` as a heatmap, selecting `channel` from the
+`(c, y, x)` array. When pyramid levels are present, `Makie.Resampler`
+is used for zoom-responsive lazy tile loading.
 
 ```julia
-fig, ax, plt = spatial_image(ds.images["morphology_focus"]; channel=1)
+fig, ax, plt = heatmap(img; channel=1, colormap=:grays)
+heatmap!(ax, img; channel=2, colormap=:viridis)
 ```
 """
-function spatial_image(img::SpatialImage; channel::Int=1, kwargs...)
+function Makie.heatmap(img::SpatialImage; channel::Int=1, kwargs...)
     args = _image_to_heatmap_args(Heatmap, img, channel)
     return heatmap(args...; kwargs...)
 end
 
-function spatial_image!(ax, img::SpatialImage; channel::Int=1, kwargs...)
+function Makie.heatmap!(ax, img::SpatialImage; channel::Int=1, kwargs...)
     args = _image_to_heatmap_args(Heatmap, img, channel)
     return heatmap!(ax, args...; kwargs...)
 end

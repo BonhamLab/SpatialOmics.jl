@@ -10,6 +10,11 @@
 #   poly(shp)
 #   poly!(ax, shp; color=:transparent, strokecolor=:white, strokewidth=0.5)
 
+# View dispatch — crop is applied lazily at render time.
+function Makie.convert_arguments(P::Type{<:Poly}, v::SpatialElementView{<:SpatialShapes})
+    return Makie.convert_arguments(P, crop(v.parent, v.extent))
+end
+
 """
     Makie.convert_arguments(P, shp::SpatialShapes)
 
