@@ -11,11 +11,16 @@
 #                          .images/.points/.shapes/.labels/.tables returns a
 #                          ViewDict that vends SpatialElementViews on indexing.
 #
-# Construction
-# ────────────
-#   view(ds, ext)          → SpatialDatasetView
-#   view(pts, ext)         → SpatialElementView{SpatialPoints}
-#   roi.points["key"]      → SpatialElementView{SpatialPoints}
+# Construction — three equivalent forms:
+# ────────────────────────────────────────
+#   view(ds, ext)                → SpatialDatasetView  (explicit SpatialExtent)
+#   view(ds, xmin, xmax, ymin, ymax)  → SpatialDatasetView  (4 numbers, x-first)
+#   view(ds, y_range, x_range)   → SpatialDatasetView  (ranges, dim 1 = y)
+#   ds[y_range, x_range]         → SpatialDatasetView  (getindex sugar)
+#   @view ds[y_range, x_range]   → SpatialDatasetView  (free: @view calls view)
+#
+#   Same forms for view(el, ...) → SpatialElementView{T}
+#   roi.points["key"]            → SpatialElementView{SpatialPoints}
 #
 # Plotting (in SpatialViz)
 # ────────────────────────
@@ -148,9 +153,14 @@ end
 
 """
     crop(pts::SpatialPoints, ext::SpatialExtent) -> SpatialPoints
+    crop(pts::SpatialPoints, xmin, xmax, ymin, ymax) -> SpatialPoints
 
 Return a new `SpatialPoints` containing only the points within `ext`.
 """
+crop(pts::SpatialPoints, xmin::Real, xmax::Real, ymin::Real, ymax::Real,
+     cs::String="global") =
+    crop(pts, SpatialExtent(xmin, xmax, ymin, ymax, cs))
+
 function crop(pts::SpatialPoints{T}, ext::SpatialExtent) where T
     x = pts.coordinates[:, 1]
     y = pts.coordinates[:, 2]
@@ -225,9 +235,12 @@ A lazy, extent-scoped view over a `SpatialDataset`. Property access on
 `.images`, `.points`, `.shapes`, `.labels`, `.tables` returns a `ViewDict`
 that vends `SpatialElementView` objects on key lookup.
 
-Construct via `Base.view`:
+Three equivalent construction forms:
 ```julia
-roi = view(xen, SpatialExtent(cx-500, cx+500, cy-500, cy+500))
+roi = view(xen, cx-500, cx+500, cy-500, cy+500)   # 4 numbers: xmin,xmax,ymin,ymax
+roi = view(xen, 250:1250, 10000:11000)             # ranges: [y_range, x_range]
+roi = xen[250:1250, 10000:11000]                   # getindex sugar
+roi = @view xen[250:1250, 10000:11000]             # @view works identically
 
 heatmap!(ax, roi.images["morphology_focus"]; channel=1, colormap=:grays)
 scatter!(ax, roi.points["transcripts"])
@@ -265,3 +278,43 @@ function Base.show(io::IO, v::SpatialDatasetView{T}) where T
     print(io, "SpatialDatasetView{$T}($xr, $yr, ",
           "$ni image(s), $np point(s), $ns shape(s), $nl label(s))")
 end
+
+# ---------------------------------------------------------------------------
+# Convenience view constructors — avoid spelling out SpatialExtent
+# ---------------------------------------------------------------------------
+#
+# Dim convention for range / getindex forms:
+#   dim 1 = y (rows),  dim 2 = x (cols)
+#   thing[y_range, x_range]  →  view scoped to those y and x bounds
+#
+# @view thing[y_range, x_range] is free: Julia's @view macro rewrites
+#   @view A[i, j]  →  view(A, i, j)
+# so defining Base.view below is all that is needed.
+
+# ── Helper ──────────────────────────────────────────────────────────────────
+_extent_from_ranges(y::AbstractRange, x::AbstractRange, cs::String="global") =
+    SpatialExtent(Float64(first(x)), Float64(last(x)),
+                  Float64(first(y)), Float64(last(y)), cs)
+
+# ── 4-number form: view(thing, xmin, xmax, ymin, ymax) ──────────────────────
+Base.view(ds::SpatialDataset, xmin::Real, xmax::Real, ymin::Real, ymax::Real,
+          cs::String="global") =
+    view(ds, SpatialExtent(xmin, xmax, ymin, ymax, cs))
+
+Base.view(el::SpatialElement, xmin::Real, xmax::Real, ymin::Real, ymax::Real,
+          cs::String="global") =
+    view(el, SpatialExtent(xmin, xmax, ymin, ymax, cs))
+
+# ── Range form: view(thing, y_range, x_range) ───────────────────────────────
+Base.view(ds::SpatialDataset, y::AbstractRange, x::AbstractRange) =
+    view(ds, _extent_from_ranges(y, x))
+
+Base.view(el::SpatialElement, y::AbstractRange, x::AbstractRange) =
+    view(el, _extent_from_ranges(y, x))
+
+# ── getindex: thing[y_range, x_range] ───────────────────────────────────────
+Base.getindex(ds::SpatialDataset, y::AbstractRange, x::AbstractRange) =
+    view(ds, y, x)
+
+Base.getindex(el::SpatialElement, y::AbstractRange, x::AbstractRange) =
+    view(el, y, x)
