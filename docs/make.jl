@@ -2,11 +2,12 @@ using Documenter
 using SpatialOmics
 import SpatialOmicsBase
 import SpatialIO
+import SpatialViz
 
 makedocs(
     sitename = "SpatialOmics.jl",
     authors  = "stx_dev contributors",
-    modules  = [SpatialOmics, SpatialOmicsBase, SpatialIO],
+    modules  = [SpatialOmics, SpatialOmicsBase, SpatialIO, SpatialViz],
     remotes  = nothing,
     format   = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
@@ -16,10 +17,12 @@ makedocs(
         "Home"      => "index.md",
         "Guides"    => [
             "guides/quickstart.md",
+            "guides/visualization.md",
             "guides/cosmx.md",
         ],
         "Reference" => [
             "reference/data_structures.md",
+            "reference/views.md",
             "reference/platform_readers.md",
             "reference/spatialdata_io.md",
             "reference/format_utils.md",

@@ -116,8 +116,20 @@ function (s::ImagePyramidSampler)(x::LinRange, y::LinRange)
     # Map y (row range in finest coords [1..ny]) → row indices in this level.
     ri = _scale_range(y, finest_ny, ny_k)
 
-    # level[ri, ci] is (length(y), length(x)); transpose → (length(x), length(y)).
-    return permutedims(level[ri, ci])
+    # Read a contiguous block using UnitRange indexing — DiskArray backends
+    # (Zarr, HDF5) handle UnitRange reads correctly across chunk boundaries.
+    # Fancy Vector{Int} indexing can produce stripe artifacts due to
+    # non-contiguous multi-chunk access patterns.
+    ri_range = minimum(ri):maximum(ri)
+    ci_range = minimum(ci):maximum(ci)
+    block = collect(Float32.(level[ri_range, ci_range]))  # materialise tile
+
+    # Remap ri/ci to local indices within the loaded block, then subsample.
+    ri_local = ri .- (first(ri_range) - 1)
+    ci_local = ci .- (first(ci_range) - 1)
+
+    # block[ri_local, ci_local] is (length(y), length(x)); transpose → (length(x), length(y)).
+    return permutedims(block[ri_local, ci_local])
 end
 
 # Scale a LinRange from finest-level coordinates [1..finest_N] to level
