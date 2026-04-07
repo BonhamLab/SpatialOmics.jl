@@ -180,7 +180,8 @@ function _zread_array_nd(path::String)
         cpath = _chunk_path(path, chunk_coords)
         if isfile(cpath)
             dec        = _zdecompress(Base.read(cpath), codecs)
-            chunk_full = reshape(reinterpret(T, dec), chunk_shape)
+            chunk_c    = reshape(reinterpret(T, dec), reverse(chunk_shape))
+            chunk_full = permutedims(chunk_c, N:-1:1)
             local_r    = ntuple(i -> 1:c_sizes[i], N)
             result[out_r...] .= chunk_full[local_r...]
         else
@@ -243,9 +244,11 @@ function DiskArrays.readblock!(
         cpath = _chunk_path(a.path, chunk_coords)
         if isfile(cpath)
             dec = _zdecompress(Base.read(cpath), a.codecs)
-            # Chunks are always stored at full chunk_shape size (padded with fill value).
-            # Reshape to full chunk_shape, then slice the valid (possibly smaller) region.
-            chunk_data = reshape(reinterpret(T, dec), a.chunk_shape)
+            # Zarr v3 stores chunks in C order (row-major, last axis varies fastest).
+            # Julia uses Fortran order (column-major, first axis varies fastest).
+            # Reshape with reversed dims then permute back to get correct indexing.
+            chunk_c    = reshape(reinterpret(T, dec), reverse(cs))
+            chunk_data = permutedims(chunk_c, N:-1:1)
             aout[aout_r...] .= chunk_data[local_r...]
         else
             aout[aout_r...] .= a.fill_value
@@ -299,7 +302,8 @@ function _zwrite_array(
         g_end   = ntuple(i -> min((chunk_coords[i]+1) * chunk_shape[i], shape[i]), N)
         slice   = ntuple(i -> g_start[i]:g_end[i], N)
         chunk   = collect(data[slice...])
-        raw     = reinterpret(UInt8, vec(chunk))
+        # Write in zarr C order (last index varies fastest): permute dims then vec in Fortran order.
+        raw     = reinterpret(UInt8, vec(permutedims(chunk, N:-1:1)))
         compressed = _zcompress(collect(raw); level = zstd_level)
         cpath = _chunk_path(path, chunk_coords)
         mkpath(dirname(cpath))
