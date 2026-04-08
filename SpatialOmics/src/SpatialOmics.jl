@@ -13,7 +13,7 @@ scope.
 All I/O is available as qualified names only — nothing in tier 2 is exported.
 
 ```julia
-using SpatialOmics          # SpatialDataset, add_image!, etc.
+using SpatialOmics          # SpatialDataset, images, points, ds["key"] = el, …
 import SpatialOmics as SO   # SO.load_cosmx, SO.read, SO.write, SO.Zarr, …
 
 ds = SO.load_cosmx("/data/run/")
@@ -38,13 +38,13 @@ export SpatialDataset,
 
 import SpatialOmicsBase:
     spatial_dataset,
-    add_image!, add_labels!, add_points!, add_shapes!, add_table!,
-    get_image,  get_labels,  get_points,  get_shapes,  get_table,
+    images, labels, points, shapes, tables, metadata,
+    channels, channels!,
     get_metadata, set_metadata!
 
 export spatial_dataset,
-       add_image!, add_labels!, add_points!, add_shapes!, add_table!,
-       get_image,  get_labels,  get_points,  get_shapes,  get_table,
+       images, labels, points, shapes, tables, metadata,
+       channels, channels!,
        get_metadata, set_metadata!
 
 # ── Coordinate systems and transformations (exported) ─────────────────────────

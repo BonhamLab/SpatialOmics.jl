@@ -20,7 +20,7 @@ using DataFrames
     @testset "SpatialImage" begin
         data = rand(Float32, 100, 100)
         axes = (x = 1:100, y = 1:100)
-        img = SpatialImage{Float32}(data, axes, Dict{String,Any}())
+        img = SpatialImage(data, axes, Dict{String,Any}())
         @test img isa SpatialElement
         @test size(img.data) == (100, 100)
     end
@@ -34,14 +34,14 @@ using DataFrames
         @test nrow(pts.features) == 50
     end
 
-    @testset "add / get element helpers" begin
+    @testset "setindex! routing" begin
         ds = spatial_dataset()
         coords = rand(Float32, 10, 2)
         feats = DataFrame(gene = fill("ACTB", 10))
         pts = SpatialPoints{Float32}(coords, feats, Dict{String,Any}())
-        add_points!(ds, "transcripts", pts)
+        ds["transcripts"] = pts
         @test haskey(ds.points, "transcripts")
-        @test get_points(ds, "transcripts") === pts
+        @test points(ds, "transcripts") === pts
     end
 
     @testset "CoordinateSystem" begin

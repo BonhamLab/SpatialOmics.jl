@@ -15,7 +15,11 @@ const VISIUM_ZARR = abspath(@__DIR__, "..", "..", "test_data", "experiments", "v
 # Check whether a value is a lazy disk-backed array (does not materialise data)
 _is_lazy(x) = x isa DiskArrays.AbstractDiskArray
 
-# ─── from_spatialdata ─────────────────────────────────────────────────────────
+# ─── from_spatialdata — data-dependent tests (skipped if zarr stores absent) ──
+
+if !isdir(XENIUM_ZARR)
+    @warn "Skipping Xenium integration tests — store not found at $XENIUM_ZARR"
+else
 
 @testset "from_spatialdata — Xenium store structure" begin
     ds = from_spatialdata(XENIUM_ZARR)
@@ -51,11 +55,8 @@ end
 
     img = ds.images["he_image"]
     @test _is_lazy(img.data)
-    # Full-resolution H&E: 3 channels × spatial extent — check ndims and channel count
     @test ndims(img.data) == 3
     @test size(img.data, 1) == 3   # c, y, x layout
-
-    # Axes named-tuple should carry at least x and y
     @test :x ∈ keys(img.axes)
     @test :y ∈ keys(img.axes)
 
@@ -68,15 +69,10 @@ end
     ds = from_spatialdata(XENIUM_ZARR)
     pts = ds.points["transcripts"]
 
-    # Coordinate matrix: N transcripts × 3 dims (x, y, z)
     @test size(pts.coordinates, 2) == 3
     @test size(pts.coordinates, 1) == 12_165_021
-
-    # Features DataFrame must have gene / cell annotation columns
     @test "feature_name" ∈ names(pts.features)
     @test "cell_id"      ∈ names(pts.features)
-
-    # Metadata should record which columns were used as coordinates
     @test haskey(pts.metadata, "coord_cols")
     @test pts.metadata["coord_cols"] == ["x", "y", "z"]
 end
@@ -84,8 +80,6 @@ end
 @testset "from_spatialdata — Xenium shapes" begin
     ds = from_spatialdata(XENIUM_ZARR)
     cb = ds.shapes["cell_boundaries"]
-
-    # One row per cell; geometries column present
     @test length(cb.geometries) == 162_254
 end
 
@@ -93,16 +87,17 @@ end
     ds = from_spatialdata(XENIUM_ZARR)
     tbl = ds.tables["table"]
 
-    # Expression matrix: obs × var
     @test size(tbl.data) == (162_254, 377)
-
-    # obs DataFrame: one row per cell
     @test nrow(tbl.obs) == 162_254
     @test "cell_id" ∈ names(tbl.obs)
-
-    # var DataFrame: one row per gene
     @test nrow(tbl.var) == 377
 end
+
+end # if isdir(XENIUM_ZARR)
+
+if !isdir(VISIUM_ZARR)
+    @warn "Skipping Visium integration tests — store not found at $VISIUM_ZARR"
+else
 
 @testset "from_spatialdata — Visium store zarr layout" begin
     # The three Visium tables each hold a 5.5M × 19K sparse matrix (~1 GB each);
@@ -118,6 +113,8 @@ end
     img_groups = filter(e -> isdir(joinpath(VISIUM_ZARR, "images", e)), readdir(joinpath(VISIUM_ZARR, "images")))
     @test length(img_groups) == 4
 end
+
+end # if isdir(VISIUM_ZARR)
 
 # ─── to_spatialdata / round-trip ──────────────────────────────────────────────
 
@@ -138,7 +135,7 @@ end
         feats  = DataFrame(gene = ["g$i" for i in 1:100], cell = 1:100)
         pts    = SpatialPoints(coords, feats, Dict{String,Any}("coord_cols" => ["x", "y"]))
         ds_out = spatial_dataset()
-        add_points!(ds_out, "spots", pts)
+        ds_out["spots"] = pts
 
         to_spatialdata(ds_out, out)
         @test isfile(joinpath(out, "points", "spots", "zarr.json"))
@@ -163,7 +160,7 @@ end
         data = rand(UInt8, 2, 8, 8)
         img  = SpatialImage(data, (c = "", y = "", x = ""), Dict{String,Any}())
         ds_out = spatial_dataset()
-        add_image!(ds_out, "dapi", img)
+        ds_out["dapi"] = img
 
         to_spatialdata(ds_out, out)
         @test isdir(joinpath(out, "images", "dapi"))
@@ -187,7 +184,7 @@ end
         var = DataFrame(_index = ["g1","g2","g3","g4","g5"])
         tbl = SpatialTable(X, obs, var, Dict{String,Any}())
         ds_out = spatial_dataset()
-        add_table!(ds_out, "counts", tbl)
+        ds_out["counts"] = tbl
 
         to_spatialdata(ds_out, out)
         ds_in = from_spatialdata(out)

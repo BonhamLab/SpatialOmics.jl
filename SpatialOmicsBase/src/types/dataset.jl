@@ -90,37 +90,51 @@ _summary_shapes(shp::SpatialShapes)  = "$(length(shp.geometries)) shapes × $(nc
 _summary_table(tbl::SpatialTable)    = "$(size(tbl.data, 1)) obs × $(size(tbl.data, 2)) vars"
 
 # ---------------------------------------------------------------------------
-# Mutating helpers — stubs, full logic TBD in Phase 1
+# Indexing — ds[name] = element  /  ds[name, ElementType]
 # ---------------------------------------------------------------------------
 
-function add_image!(ds::SpatialDataset, name::String, img::SpatialImage)
-    ds.images[name] = img
-    return ds
-end
+Base.setindex!(ds::SpatialDataset, img::SpatialImage,   k::String) = (ds.images[k]  = img;  ds)
+Base.setindex!(ds::SpatialDataset, pts::SpatialPoints,  k::String) = (ds.points[k]  = pts;  ds)
+Base.setindex!(ds::SpatialDataset, lbl::SpatialLabels,  k::String) = (ds.labels[k]  = lbl;  ds)
+Base.setindex!(ds::SpatialDataset, shp::SpatialShapes,  k::String) = (ds.shapes[k]  = shp;  ds)
+Base.setindex!(ds::SpatialDataset, tbl::SpatialTable,   k::String) = (ds.tables[k]  = tbl;  ds)
 
-function add_points!(ds::SpatialDataset, name::String, pts::SpatialPoints)
-    ds.points[name] = pts
-    return ds
-end
+"""
+    images(ds)              -> Dict{String, SpatialImage}
+    images(ds, name)        -> SpatialImage
+"""
+images(ds::SpatialDataset)              = ds.images
+images(ds::SpatialDataset, k::String)   = ds.images[k]
 
-function add_labels!(ds::SpatialDataset, name::String, lbl::SpatialLabels)
-    ds.labels[name] = lbl
-    return ds
-end
+"""
+    labels(ds)              -> Dict{String, SpatialLabels}
+    labels(ds, name)        -> SpatialLabels
+"""
+labels(ds::SpatialDataset)              = ds.labels
+labels(ds::SpatialDataset, k::String)   = ds.labels[k]
 
-function add_shapes!(ds::SpatialDataset, name::String, shp::SpatialShapes)
-    ds.shapes[name] = shp
-    return ds
-end
+"""
+    points(ds)              -> Dict{String, SpatialPoints}
+    points(ds, name)        -> SpatialPoints
+"""
+points(ds::SpatialDataset)              = ds.points
+points(ds::SpatialDataset, k::String)   = ds.points[k]
 
-function add_table!(ds::SpatialDataset, name::String, tbl::SpatialTable)
-    ds.tables[name] = tbl
-    return ds
-end
+"""
+    shapes(ds)              -> Dict{String, SpatialShapes}
+    shapes(ds, name)        -> SpatialShapes
+"""
+shapes(ds::SpatialDataset)              = ds.shapes
+shapes(ds::SpatialDataset, k::String)   = ds.shapes[k]
 
-# Read-only accessors with descriptive error messages
-get_image(ds::SpatialDataset, name::String) = ds.images[name]
-get_points(ds::SpatialDataset, name::String) = ds.points[name]
-get_labels(ds::SpatialDataset, name::String) = ds.labels[name]
-get_shapes(ds::SpatialDataset, name::String) = ds.shapes[name]
-get_table(ds::SpatialDataset, name::String) = ds.tables[name]
+"""
+    tables(ds)              -> Dict{String, SpatialTable}
+    tables(ds, name)        -> SpatialTable
+"""
+tables(ds::SpatialDataset)              = ds.tables
+tables(ds::SpatialDataset, k::String)   = ds.tables[k]
+
+"""
+    metadata(ds)            -> Dict{String, Any}
+"""
+metadata(ds::SpatialDataset)            = ds.metadata

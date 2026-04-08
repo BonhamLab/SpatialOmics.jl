@@ -96,7 +96,8 @@ function write_hdf5(ds::SpatialDataset, path::String)
                 for col in feat_cols
                     _hdf5_write_column(fg, col, pts.features[!, col])
                 end
-                coord_cols = try pts.metadata["coord_cols"] catch; ["x", "y"] end
+                coord_cols = haskey(pts.metadata, "coord_cols") ?
+                             pts.metadata["coord_cols"] : ["x", "y"]
                 HDF5.write_attribute(g, "coord_cols",
                     JSON3.write(collect(String, coord_cols)))
                 HDF5.write_attribute(g, "feat_cols",  JSON3.write(feat_cols))
@@ -164,7 +165,7 @@ function read_hdf5(path::String)::SpatialDataset
                 ax_units = get(axes_d, "units", String[])
                 ax_nt    = _build_axes_nt(ax_names, ax_units)
                 img_meta = _read_json_attr(g, "metadata")
-                add_image!(ds, name, SpatialImage(data, ax_nt, img_meta))
+                ds[name] = SpatialImage(data, ax_nt, img_meta)
             end
         end
 
@@ -174,7 +175,7 @@ function read_hdf5(path::String)::SpatialDataset
                 g    = fid["labels"][name]
                 data = Base.read(g["data"])
                 lbl_meta = _read_json_attr(g, "metadata")
-                add_labels!(ds, name, SpatialLabels(data, lbl_meta))
+                ds[name] = SpatialLabels(data, lbl_meta)
             end
         end
 
@@ -199,8 +200,7 @@ function read_hdf5(path::String)::SpatialDataset
                     ["x", "y"]
                 pts_meta = _read_json_attr(g, "metadata")
                 pts_meta["coord_cols"] = coord_cols
-                add_points!(ds, name,
-                    SpatialPoints(coords, feat_df, pts_meta))
+                ds[name] = SpatialPoints(coords, feat_df, pts_meta)
             end
         end
 
@@ -220,7 +220,7 @@ function read_hdf5(path::String)::SpatialDataset
                     end
                 end
                 shp_meta = _read_json_attr(g, "metadata")
-                add_shapes!(ds, name, SpatialShapes(Any[], feat_df, shp_meta))
+                ds[name] = SpatialShapes(Any[], feat_df, shp_meta)
             end
         end
 
@@ -232,7 +232,7 @@ function read_hdf5(path::String)::SpatialDataset
                 obs = _hdf5_read_dataframe(g, "obs", "obs_cols")
                 var = _hdf5_read_dataframe(g, "var", "var_cols")
                 tbl_meta = _read_json_attr(g, "metadata")
-                add_table!(ds, name, SpatialTable(X, obs, var, tbl_meta))
+                ds[name] = SpatialTable(X, obs, var, tbl_meta)
             end
         end
 

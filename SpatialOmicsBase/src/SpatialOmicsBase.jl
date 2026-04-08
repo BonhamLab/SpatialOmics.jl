@@ -26,8 +26,9 @@ export AffineTransformation, IdentityTransformation
 
 # Construction helpers
 export spatial_dataset
-export add_image!, add_points!, add_labels!, add_shapes!, add_table!
-export get_image, get_points, get_labels, get_shapes, get_table
+
+export images, labels, points, shapes, tables, metadata
+export channels, channels!
 
 # Coordinate utilities
 export transform_coordinates, compose_transformations, invert_transformation

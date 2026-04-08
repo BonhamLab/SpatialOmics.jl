@@ -9,6 +9,11 @@ carry spatial coordinate information and a metadata dictionary.
 """
 abstract type SpatialElement end
 
+# Shared display helper — truncates a DataFrame's column list to avoid long lines.
+_cols_str(df::DataFrame, limit::Int=4) =
+    ncol(df) <= limit ? join(names(df), ", ") :
+                        join(names(df)[1:limit-1], ", ") * ", …+$(ncol(df)-(limit-1))"
+
 # ---------------------------------------------------------------------------
 # SpatialImage
 # ---------------------------------------------------------------------------
@@ -43,6 +48,80 @@ end
 SpatialImage(data::AbstractArray{T}, axes::NamedTuple, metadata::Dict{String,Any}) where T =
     SpatialImage{T}(data, Any[], axes, metadata)
 
+"""
+    channels(img::SpatialImage) -> Vector{String}
+
+Return the channel labels for `img`.
+
+Labels are read from the `omero.channels[i].label` section of the OME-NGFF
+metadata when present. Falls back to `["ch_1", "ch_2", …]` if the metadata is
+absent or incomplete. Returns an empty vector for images with no channel axis
+(i.e. `img.axes` has no `:c` key).
+"""
+function channels(img::SpatialImage)
+    c_idx = findfirst(==(:c), keys(img.axes))
+    c_idx === nothing && return String[]
+    n = size(img.data, c_idx)
+
+    # User-set labels take priority over anything in the zarr metadata
+    user = get(img.metadata, "channel_labels", nothing)
+    user !== nothing && length(user) == n && return convert(Vector{String}, user)
+
+    lbls = _omero_channel_labels(img.metadata, n)
+    lbls !== nothing && return lbls
+
+    return ["ch_$i" for i in 1:n]
+end
+
+"""
+    channels!(img::SpatialImage, labels::Vector{String}) -> SpatialImage
+
+Set the channel labels for `img`. Stored in `img.metadata["channel_labels"]`
+and returned by `channels(img)` with higher priority than OME-NGFF metadata.
+
+```julia
+channels!(images(xen, "he_image"), ["R", "G", "B"])
+```
+"""
+function channels!(img::SpatialImage, labels::Vector{String})
+    c_idx = findfirst(==(:c), keys(img.axes))
+    c_idx === nothing && error("channels!: image has no channel axis")
+    n = size(img.data, c_idx)
+    length(labels) == n ||
+        error("channels!: $(length(labels)) labels for $n channels")
+    img.metadata["channel_labels"] = labels
+    return img
+end
+
+# Walk the zarr_attrs → attributes → omero → channels path without try/catch.
+# Returns a Vector{String} of length n, or nothing if the metadata is absent/incomplete.
+function _omero_channel_labels(meta::Dict{String,Any}, n::Int)
+    zarr_attrs = get(meta, "zarr_attrs", nothing)
+    zarr_attrs === nothing && return nothing
+    haskey(zarr_attrs, :attributes) || return nothing
+    attrs = zarr_attrs.attributes
+    haskey(attrs, :omero) || return nothing
+    haskey(attrs.omero, :channels) || return nothing
+    ch = attrs.omero.channels
+    length(ch) == n || return nothing
+    haskey(first(ch), :label) || return nothing
+    return [String(c.label) for c in ch]
+end
+
+function Base.show(io::IO, img::SpatialImage{T}) where T
+    sz = size(img.data)
+    dims = if !isempty(img.axes)
+        join(["$k=$(sz[i])" for (i, k) in enumerate(keys(img.axes))], " × ")
+    else
+        join(sz, "×")
+    end
+    nlevels = length(img.pyramid)
+    pyramid_str = nlevels > 0 ? ", $nlevels pyramid level$(nlevels == 1 ? "" : "s")" : ""
+    ch = channels(img)
+    ch_str = isempty(ch) ? "" : ", channels: [$(join(ch, ", "))]"
+    print(io, "SpatialImage{$T}($dims$pyramid_str$ch_str)")
+end
+
 # ---------------------------------------------------------------------------
 # SpatialPoints
 # ---------------------------------------------------------------------------
@@ -64,6 +143,11 @@ struct SpatialPoints{T<:AbstractFloat} <: SpatialElement
     metadata::Dict{String,Any}
 end
 
+function Base.show(io::IO, pts::SpatialPoints{T}) where T
+    n, d = size(pts.coordinates)
+    print(io, "SpatialPoints{$T}($n × $(d)D, features: [", _cols_str(pts.features), "])")
+end
+
 # ---------------------------------------------------------------------------
 # SpatialLabels
 # ---------------------------------------------------------------------------
@@ -82,6 +166,10 @@ Fields
 struct SpatialLabels <: SpatialElement
     data::AbstractArray{<:Integer}
     metadata::Dict{String,Any}
+end
+
+function Base.show(io::IO, lbl::SpatialLabels)
+    print(io, "SpatialLabels(", join(size(lbl.data), "×"), " ", eltype(lbl.data), ")")
 end
 
 # ---------------------------------------------------------------------------
@@ -106,6 +194,10 @@ struct SpatialShapes <: SpatialElement
     metadata::Dict{String,Any}
 end
 
+function Base.show(io::IO, shp::SpatialShapes)
+    print(io, "SpatialShapes(", length(shp.geometries), " shapes, features: [", _cols_str(shp.features), "])")
+end
+
 # ---------------------------------------------------------------------------
 # SpatialTable
 # ---------------------------------------------------------------------------
@@ -128,4 +220,9 @@ struct SpatialTable <: SpatialElement
     obs::DataFrame
     var::DataFrame
     metadata::Dict{String,Any}
+end
+
+function Base.show(io::IO, tbl::SpatialTable)
+    n_obs, n_var = size(tbl.data)
+    print(io, "SpatialTable($n_obs obs × $n_var vars, obs: [", _cols_str(tbl.obs), "])")
 end

@@ -36,6 +36,8 @@ module SpatialViz
 using Makie
 using GeometryBasics
 using SpatialOmicsBase
+using ImageCore: colorview, RGB
+using MappedArrays: mappedarray
 
 # ---------------------------------------------------------------------------
 # Re-export key types users will need
@@ -47,7 +49,7 @@ export ImagePyramidSampler
 # ---------------------------------------------------------------------------
 # Plotting helpers
 # ---------------------------------------------------------------------------
-export spatial_panel
+export spatial_panel, composite
 
 # ---------------------------------------------------------------------------
 # Includes — one file per element type, plus composite helpers

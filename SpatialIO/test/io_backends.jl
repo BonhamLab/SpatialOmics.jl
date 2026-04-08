@@ -16,30 +16,29 @@ function _make_test_dataset()
     # image
     img_data = rand(Float32, 3, 16, 16)
     img = SpatialImage(img_data, (c = "", y = "µm", x = "µm"), Dict{String,Any}())
-    add_image!(ds, "morphology", img)
+    ds["morphology"] = img
 
     # labels
     lbl_data = Int32.(rand(1:5, 16, 16))
-    add_labels!(ds, "cell_labels", SpatialLabels(lbl_data, Dict{String,Any}()))
+    ds["cell_labels"] = SpatialLabels(lbl_data, Dict{String,Any}())
 
     # points
     coords = rand(Float32, 20, 2)
     feats  = DataFrame(gene = fill("GAPDH", 20), cell_id = Int32.(1:20))
     pts    = SpatialPoints(coords, feats,
                            Dict{String,Any}("coord_cols" => ["x", "y"]))
-    add_points!(ds, "transcripts", pts)
+    ds["transcripts"] = pts
 
     # shapes (feature-only; no WKB geometries needed for HDF5 round-trip)
     shp_feats = DataFrame(cell_id = Int32.(1:5), area = rand(Float32, 5))
-    shp = SpatialShapes(Any[], shp_feats, Dict{String,Any}())
-    add_shapes!(ds, "cell_boundaries", shp)
+    ds["cell_boundaries"] = SpatialShapes(Any[], shp_feats, Dict{String,Any}())
 
     # table
     X   = sparse(rand(Float32, 10, 50))
     obs = DataFrame(barcode = ["BC$(i)" for i in 1:10],
                     n_genes  = Int32.(rand(100:500, 10)))
     var = DataFrame(gene = ["G$(i)" for i in 1:50])
-    add_table!(ds, "expression", SpatialTable(X, obs, var, Dict{String,Any}()))
+    ds["expression"] = SpatialTable(X, obs, var, Dict{String,Any}())
 
     return ds
 end
@@ -110,8 +109,8 @@ end
         ds   = spatial_dataset()
         coords = rand(Float32, 15, 2)
         feats  = DataFrame(gene = fill("ACTB", 15))
-        add_points!(ds, "tx", SpatialPoints(coords, feats,
-                              Dict{String,Any}("coord_cols" => ["x","y"])))
+        ds["tx"] = SpatialPoints(coords, feats,
+                                Dict{String,Any}("coord_cols" => ["x","y"]))
 
         write_zarr(ds, path)
         @test isdir(path)

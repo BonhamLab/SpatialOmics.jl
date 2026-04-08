@@ -49,7 +49,7 @@ function _from_spatialdata_native(zarr_path::String)::SpatialDataset
     if isdir(images_path)
         for name in _zlist_groups(images_path)
             img = _read_sd_image(joinpath(images_path, name))
-            add_image!(ds, name, img)
+            ds[name] = img
         end
     end
 
@@ -58,7 +58,7 @@ function _from_spatialdata_native(zarr_path::String)::SpatialDataset
     if isdir(labels_path)
         for name in _zlist_groups(labels_path)
             lbl = _read_sd_labels(joinpath(labels_path, name))
-            add_labels!(ds, name, lbl)
+            ds[name] = lbl
         end
     end
 
@@ -67,7 +67,7 @@ function _from_spatialdata_native(zarr_path::String)::SpatialDataset
     if isdir(points_path)
         for name in _zlist_groups(points_path)
             pts = _read_sd_points(joinpath(points_path, name))
-            add_points!(ds, name, pts)
+            ds[name] = pts
         end
     end
 
@@ -76,7 +76,7 @@ function _from_spatialdata_native(zarr_path::String)::SpatialDataset
     if isdir(shapes_path)
         for name in _zlist_groups(shapes_path)
             shp = _read_sd_shapes(joinpath(shapes_path, name))
-            add_shapes!(ds, name, shp)
+            ds[name] = shp
         end
     end
 
@@ -85,7 +85,7 @@ function _from_spatialdata_native(zarr_path::String)::SpatialDataset
     if isdir(tables_path)
         for name in _zlist_groups(tables_path)
             tbl = _read_sd_table(joinpath(tables_path, name))
-            add_table!(ds, name, tbl)
+            ds[name] = tbl
         end
     end
 
@@ -114,9 +114,13 @@ function _read_sd_image(path::String)::SpatialImage
     end
 
     # Parse axes from NGFF multiscales metadata
-    axes_meta = try
+    axes_meta = if haskey(meta, :attributes) &&
+                   haskey(meta.attributes, :ome) &&
+                   haskey(meta.attributes.ome, :multiscales) &&
+                   !isempty(meta.attributes.ome.multiscales) &&
+                   haskey(meta.attributes.ome.multiscales[1], :axes)
         meta.attributes.ome.multiscales[1].axes
-    catch
+    else
         nothing
     end
     ax_nt = _axes_namedtuple(axes_meta)
@@ -177,7 +181,8 @@ function _read_sd_points(path::String)::SpatialPoints
     df = _read_parquet(parquet_path)
 
     # Determine coordinate columns from metadata (default: x, y, z if present)
-    axes = try String.(meta.attributes.axes) catch; ["x", "y"] end
+    axes = haskey(meta, :attributes) && haskey(meta.attributes, :axes) ?
+           String.(meta.attributes.axes) : ["x", "y"]
     coord_cols = [a for a in axes if a in names(df)]
     isempty(coord_cols) && (coord_cols = ["x", "y"])
 
@@ -292,8 +297,11 @@ function _read_anndata_dataframe(path::String)::DataFrame
     isdir(path) || return DataFrame()
     meta = _zread_meta(path)
 
-    col_order = try String.(meta.attributes["column-order"]) catch; String[] end
-    index_col = try String(meta.attributes["_index"]) catch; "_index" end
+    attrs     = haskey(meta, :attributes) ? meta.attributes : nothing
+    col_order = attrs !== nothing && haskey(attrs, "column-order") ?
+                String.(attrs["column-order"]) : String[]
+    index_col = attrs !== nothing && haskey(attrs, "_index") ?
+                String(attrs["_index"]) : "_index"
 
     df = DataFrame()
 
@@ -346,7 +354,9 @@ function _read_csr_matrix(path::String)::SparseMatrixCSC
     isdir(path) || error("_read_csr_matrix: missing group $path")
     meta = _zread_meta(path)
 
-    shape = try Int.(meta.attributes.shape) catch; error("_read_csr_matrix: no shape in $path") end
+    haskey(meta, :attributes) && haskey(meta.attributes, :shape) ||
+        error("_read_csr_matrix: no shape in $path")
+    shape = Int.(meta.attributes.shape)
     n_obs, n_genes = shape[1], shape[2]
 
     data_vals = Float32.(_zread_array_1d(joinpath(path, "data")))
@@ -392,7 +402,7 @@ end
 function _axes_namedtuple(axes_meta)
     axes_meta === nothing && return NamedTuple()
     names_vec  = [Symbol(String(a.name)) for a in axes_meta]
-    units_vec  = [try String(a.unit) catch; "" end for a in axes_meta]
+    units_vec  = [haskey(a, :unit) ? String(a.unit) : "" for a in axes_meta]
     vals       = Tuple(units_vec)
     return NamedTuple{Tuple(names_vec)}(vals)
 end

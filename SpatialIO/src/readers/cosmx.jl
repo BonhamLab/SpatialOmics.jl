@@ -275,7 +275,7 @@ function read_data(reader::CosMxReader, path::String)::SpatialDataset
     # ── SpatialPoints — transcripts ───────────────────────────────────────────
     coords = Matrix{Float32}(hcat(all_tx.x, all_tx.y))   # N×2
     feat   = select(all_tx, Not([:x, :y]))
-    add_points!(ds, "transcripts", SpatialPoints(coords, feat, Dict{String,Any}()))
+    ds["transcripts"] = SpatialPoints(coords, feat, Dict{String,Any}())
 
     # ── SpatialTable — expression counts ─────────────────────────────────────
     # Build a global cell key "fov_cellid" to uniquify cells across FOVs
@@ -283,13 +283,13 @@ function read_data(reader::CosMxReader, path::String)::SpatialDataset
 
     if !isempty(endo_tx) && !isempty(plex_df)
         expr_tbl = _build_expression_table(endo_tx, all_stats, plex_df)
-        add_table!(ds, "table", expr_tbl)
+        ds["table"] = expr_tbl
     end
 
     # ── SpatialShapes — cell boundaries ──────────────────────────────────────
     if !isempty(all_bounds)
         shp = _build_shapes(all_bounds)
-        add_shapes!(ds, "cell_boundaries", shp)
+        ds["cell_boundaries"] = shp
     end
 
     # ── SpatialImage — composite JPEGs (skip if lazy) ────────────────────────
@@ -300,7 +300,7 @@ function read_data(reader::CosMxReader, path::String)::SpatialDataset
                 jpg = joinpath(composite_dir, "CellComposite_F$(lpad(fov_id,5,'0')).jpg")
                 isfile(jpg) || continue
                 img = _load_composite_jpg(jpg)
-                add_image!(ds, "composite_F$(lpad(fov_id,5,'0'))", img)
+                ds["composite_F$(lpad(fov_id,5,'0'))"] = img
             end
         end
     end

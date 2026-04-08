@@ -30,13 +30,23 @@ function to_spatialdata(
     end
 end
 
+# ─── Helpers ─────────────────────────────────────────────────────────────────
+
+# Extract the group-level attributes dict from an element's stored zarr metadata,
+# falling back to an empty dict if absent (elements constructed outside of a Zarr
+# round-trip won't have zarr_attrs).
+_zarr_group_attrs(meta::Dict{String,Any}) =
+    let za = get(meta, "zarr_attrs", nothing)
+        za !== nothing && haskey(za, :attributes) ? za.attributes : Dict{String,Any}()
+    end
+
 # ─── Native writer ────────────────────────────────────────────────────────────
 
 function _to_spatialdata_native(ds::SpatialDataset, zarr_path::String)
     mkpath(zarr_path)
 
     # Write root zarr.json
-    root_attrs = try ds.metadata["zarr_attrs"].attributes catch; Dict{String,Any}() end
+    root_attrs = _zarr_group_attrs(ds.metadata)
     _zwrite_group(zarr_path, root_attrs)
 
     # ── images ────────────────────────────────────────────────────────────────
@@ -84,7 +94,7 @@ end
 
 function _write_sd_image(path::String, img::SpatialImage)
     mkpath(path)
-    group_attrs = try img.metadata["zarr_attrs"].attributes catch; Dict{String,Any}() end
+    group_attrs = _zarr_group_attrs(img.metadata)
     _zwrite_group(path, group_attrs)
 
     data = img.data
@@ -101,7 +111,7 @@ end
 
 function _write_sd_labels(path::String, lbl::SpatialLabels)
     mkpath(path)
-    group_attrs = try lbl.metadata["zarr_attrs"].attributes catch; Dict{String,Any}() end
+    group_attrs = _zarr_group_attrs(lbl.metadata)
     _zwrite_group(path, group_attrs)
 
     data = lbl.data
@@ -113,10 +123,11 @@ end
 
 function _write_sd_points(path::String, pts::SpatialPoints)
     mkpath(path)
-    group_attrs = try pts.metadata["zarr_attrs"].attributes catch; Dict{String,Any}() end
+    group_attrs = _zarr_group_attrs(pts.metadata)
     _zwrite_group(path, group_attrs)
 
-    coord_cols = try String.(pts.metadata["coord_cols"]) catch; ["x", "y"] end
+    coord_cols = haskey(pts.metadata, "coord_cols") ?
+                 String.(pts.metadata["coord_cols"]) : ["x", "y"]
     D = size(pts.coordinates, 2)
     coord_cols = coord_cols[1:min(length(coord_cols), D)]
 
@@ -133,7 +144,7 @@ end
 
 function _write_sd_shapes(path::String, shp::SpatialShapes)
     mkpath(path)
-    group_attrs = try shp.metadata["zarr_attrs"].attributes catch; Dict{String,Any}() end
+    group_attrs = _zarr_group_attrs(shp.metadata)
     _zwrite_group(path, group_attrs)
 
     df = copy(shp.features)
@@ -153,7 +164,7 @@ end
 
 function _write_sd_table(path::String, tbl::SpatialTable)
     mkpath(path)
-    group_attrs = try tbl.metadata["zarr_attrs"].attributes catch; Dict{String,Any}() end
+    group_attrs = _zarr_group_attrs(tbl.metadata)
     _zwrite_group(path, group_attrs)
 
     _write_anndata_dataframe(joinpath(path, "obs"), tbl.obs)

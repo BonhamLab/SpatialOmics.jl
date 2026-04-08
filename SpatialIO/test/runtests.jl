@@ -1,9 +1,15 @@
 using Test
-using SpatialIO
 using SpatialOmicsBase
 using DiskArrays
 using DataFrames
 using SparseArrays
+import SpatialIO
+import SpatialIO:
+    PlatformReader,
+    XeniumReader, VisiumReader, CosMxReader, MerfishReader,
+    validate_path, read_data,
+    from_spatialdata, to_spatialdata,
+    write_hdf5, read_hdf5, write_zarr, open_zarr
 
 const XENIUM_MOCK = joinpath(@__DIR__, "fixtures", "xenium_mock")
 const VISIUM_MOCK = joinpath(@__DIR__, "fixtures", "visium_mock")
