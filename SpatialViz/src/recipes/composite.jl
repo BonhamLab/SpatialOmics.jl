@@ -24,22 +24,75 @@ using Statistics: quantile
 # Shared constants / helpers
 # ---------------------------------------------------------------------------
 
-# Default per-channel colours for fluorescence (cycles if more channels than entries).
-const _FLUOR_DEFAULTS = RGBf[
-    RGBf(0.20f0, 0.40f0, 1.00f0),   # blue   — DAPI / nuclear stains
-    RGBf(0.10f0, 0.90f0, 0.10f0),   # green  — FITC / GFP
-    RGBf(1.00f0, 0.15f0, 0.15f0),   # red    — TRITC / mCherry
+# Default colour cycle (red/green/blue first, then broader palette).
+const _DEFAULT_COLORS = RGBf[
+    RGBf(1.00f0, 0.00f0, 0.00f0),   # red
+    RGBf(0.00f0, 0.90f0, 0.00f0),   # green
+    RGBf(0.00f0, 0.00f0, 1.00f0),   # blue
     RGBf(0.00f0, 0.90f0, 0.90f0),   # cyan
     RGBf(0.90f0, 0.00f0, 0.90f0),   # magenta
     RGBf(0.90f0, 0.90f0, 0.00f0),   # yellow
 ]
 
-function _resolve_composite_colors(colors, n::Int)::Vector{RGBf}
-    colors === nothing &&
-        return [_FLUOR_DEFAULTS[mod1(i, length(_FLUOR_DEFAULTS))] for i in 1:n]
-    length(colors) == n ||
-        error("composite: $(length(colors)) colours for $n channels")
-    return [RGBf(Makie.to_color(c)) for c in colors]
+# Resolve the `channels` + `colors` kwargs to parallel (indices, colors) vectors.
+#
+#   channels=nothing, colors=nothing  → first min(n,3) channels, red/green/blue
+#   channels=nothing, colors=[…]      → all channels, explicit colors (backward compat)
+#   channels=[1,3]                    → those indices, default color cycle
+#   channels=["DAPI","18S"]           → names resolved to indices, default colors
+#   channels=[1=>:red, 3=>:cyan]      → pairs carry their own colors
+#   channels=[…], colors=[…]          → parallel vectors (colors override pair colors)
+#
+# NOTE: inside functions that accept a `channels` kwarg the name `channels` shadows
+# the exported `channels()` function — callers must use SpatialOmicsBase.channels(img).
+function _resolve_channel_spec(ch_labels::Vector{String},
+                                channels_spec,
+                                colors_arg)::Tuple{Vector{Int}, Vector{RGBf}}
+    n = length(ch_labels)
+
+    # ── no spec at all: first 3 channels, red / green / blue ──────────────────
+    if channels_spec === nothing && colors_arg === nothing
+        n_sel = min(n, 3)
+        return collect(1:n_sel), _DEFAULT_COLORS[1:n_sel]
+    end
+
+    # ── colors only (backward compat): all channels, explicit colors ───────────
+    if channels_spec === nothing
+        len = length(colors_arg)
+        len == n || error("composite: $len colors for $n channels; " *
+                          "pass `channels=` to select a subset")
+        return collect(1:n), RGBf[RGBf(Makie.to_color(c)) for c in colors_arg]
+    end
+
+    # ── channels_spec given: resolve each entry to (index, color) ─────────────
+    indices    = Int[]
+    pair_colors = RGBf[]
+    for (j, spec) in enumerate(channels_spec)
+        key, pair_color = spec isa Pair ? (spec.first, spec.second) : (spec, nothing)
+        idx = if key isa Integer
+            Int(key)
+        elseif key isa AbstractString
+            i = findfirst(==(key), ch_labels)
+            i === nothing && error("composite: channel \"$key\" not found in $ch_labels")
+            i
+        else
+            error("composite: channel key must be Int or String, got $(typeof(key))")
+        end
+        (1 ≤ idx ≤ n) || error("composite: channel index $idx out of range 1..$n")
+        push!(indices, idx)
+        push!(pair_colors, pair_color !== nothing ?
+              RGBf(Makie.to_color(pair_color)) :
+              _DEFAULT_COLORS[mod1(j, length(_DEFAULT_COLORS))])
+    end
+
+    # explicit colors_arg overrides pair / default colors
+    if colors_arg !== nothing
+        length(colors_arg) == length(indices) ||
+            error("composite: $(length(colors_arg)) colors for $(length(indices)) selected channels")
+        return indices, RGBf[RGBf(Makie.to_color(c)) for c in colors_arg]
+    end
+
+    return indices, pair_colors
 end
 
 # Estimate the clip-th quantile from a strided subsample of a 2-D channel.
@@ -84,57 +137,90 @@ approximation for the full-resolution data.
 struct CompositePyramidSampler <: AbstractMatrix{RGBf}
     # All-channel levels: levels[i] is a (c, ny, nx) array, finest first.
     levels::Vector{Any}
+    channel_indices::Vector{Int}   # which channels to blend (1-based into the c dim)
     colors::Vector{RGBf}
     clip_values::Vector{Float32}   # per-channel hi, estimated from coarsest level
     mode::Symbol                   # :rgb or :fluor
+    # Coordinate transform fields — same semantics as ImagePyramidSampler.
+    # Nothing → pixel coords 1..nx / 1..ny; set by SpatialData NGFF affine reader.
+    x_range::Union{NTuple{2,Float64}, Nothing}
+    y_range::Union{NTuple{2,Float64}, Nothing}
+    perm_yx::Bool
+    flip_dim2::Bool
+    flip_dim3::Bool
 end
 
 function CompositePyramidSampler(img::SpatialImage;
-                                  colors = nothing,
+                                  channels = nothing,
+                                  colors   = nothing,
                                   clip::Real = 0.999)
-    ch_labels = channels(img)
+    # Use qualified name — `channels` kwarg shadows the exported channels() function.
+    ch_labels = SpatialOmicsBase.channels(img)
     isempty(ch_labels) && error("CompositePyramidSampler: image has no channel axis")
     n = length(ch_labels)
 
-    is_rgb   = colors === nothing && map(lowercase, ch_labels) == ["r", "g", "b"]
-    resolved = _resolve_composite_colors(colors, n)
+    is_rgb = channels === nothing && colors === nothing &&
+             map(lowercase, ch_labels) == ["r", "g", "b"]
 
-    # Build level list: base data first, then coarser pyramid levels.
-    # All kept in full (c, ny, nx) layout — channel slicing happens per tile.
+    indices, resolved = if is_rgb
+        collect(1:n), RGBf[]   # colors unused in RGB mode
+    else
+        _resolve_channel_spec(ch_labels, channels, colors)
+    end
+
     levels = Any[img.data]
     for lvl in img.pyramid
         push!(levels, lvl)
     end
 
-    # Estimate clip values from the coarsest (smallest, fastest-to-read) level.
     coarsest = last(levels)
     clip_values = if is_rgb
-        # RGB: single global max applied to all channels to preserve colour balance.
         hi = Float32(max(maximum(coarsest), eps(Float32)))
         fill(hi, n)
     else
-        Float32[_subsample_quantile(view(coarsest, i, :, :), Float64(clip)) for i in 1:n]
+        Float32[_subsample_quantile(view(coarsest, i, :, :), Float64(clip))
+                for i in indices]
     end
 
-    return CompositePyramidSampler(levels, resolved, clip_values, is_rgb ? :rgb : :fluor)
+    xr  = get(img.metadata, "x_range",   nothing)
+    yr  = get(img.metadata, "y_range",   nothing)
+    pyx = get(img.metadata, "perm_yx",   false)
+    fd2 = get(img.metadata, "flip_dim2", false)
+    fd3 = get(img.metadata, "flip_dim3", false)
+    xrt = xr === nothing ? nothing : (Float64(xr[1]), Float64(xr[2]))
+    yrt = yr === nothing ? nothing : (Float64(yr[1]), Float64(yr[2]))
+
+    return CompositePyramidSampler(levels, indices, resolved, clip_values,
+                                   is_rgb ? :rgb : :fluor,
+                                   xrt, yrt, pyx, fd2, fd3)
 end
 
 # ── AbstractMatrix interface ──────────────────────────────────────────────────
-# Report (nx, ny) — Makie heatmap convention: dim 1 → x.
+# Report (nx_norm, ny_norm) — Makie heatmap convention: dim 1 → x.
+# perm_yx swaps the normalised dimensions relative to raw (c, ny, nx) storage.
 function Base.size(s::CompositePyramidSampler)
-    _, ny, nx = size(s.levels[1])
-    return (nx, ny)
+    _, ny, nx = size(s.levels[1])   # raw (ny_raw, nx_raw)
+    return s.perm_yx ? (ny, nx) : (nx, ny)
 end
 
-# Scalar getindex — blends a single pixel from the finest level.
+# Scalar getindex — blends a single normalised-pixel from the finest level.
 function Base.getindex(s::CompositePyramidSampler, xi::Int, yi::Int)
-    level  = s.levels[1]
-    n_ch   = length(s.colors)
+    level = s.levels[1]
+    finest_nx, finest_ny = size(s)
+    raw_row, raw_col = if s.perm_yx
+        r = s.flip_dim3 ? (finest_nx + 1 - xi) : xi
+        c = s.flip_dim2 ? (finest_ny + 1 - yi) : yi
+        r, c
+    else
+        r = s.flip_dim2 ? (finest_ny + 1 - yi) : yi
+        c = s.flip_dim3 ? (finest_nx + 1 - xi) : xi
+        r, c
+    end
     r = 0f0; g = 0f0; b = 0f0
-    for i in 1:n_ch
-        v = clamp(Float32(level[i, yi, xi]) / s.clip_values[i], 0f0, 1f0)
-        c = s.colors[i]
-        r += v * c.r; g += v * c.g; b += v * c.b
+    for (j, ch) in enumerate(s.channel_indices)
+        v = clamp(Float32(level[ch, raw_row, raw_col]) / s.clip_values[j], 0f0, 1f0)
+        col = s.colors[j]
+        r += v * col.r; g += v * col.g; b += v * col.b
     end
     return RGBf(clamp(r, 0f0, 1f0), clamp(g, 0f0, 1f0), clamp(b, 0f0, 1f0))
 end
@@ -149,44 +235,80 @@ level, loads only the visible tile (all channels), and blends to `Matrix{RGBf}`
 in Makie's `(length(x), length(y))` dimension order.
 """
 function (s::CompositePyramidSampler)(x::LinRange, y::LinRange)
-    finest_nx, finest_ny = size(s)
+    finest_nx, finest_ny = size(s)   # normalised (nx_norm, ny_norm)
 
-    # Select the pyramid level whose pixel step best matches the requested zoom.
+    # ── Step 1: map global physical coords → normalised pixel [1..finest_N] ──
+    x_pix, y_pix = if s.x_range !== nothing
+        xmin, xmax = s.x_range;  ymin, ymax = s.y_range
+        sx = (finest_nx - 1) / (xmax - xmin)
+        sy = (finest_ny - 1) / (ymax - ymin)
+        LinRange(1.0 + (first(x) - xmin) * sx, 1.0 + (last(x) - xmin) * sx, length(x)),
+        LinRange(1.0 + (first(y) - ymin) * sy, 1.0 + (last(y) - ymin) * sy, length(y))
+    else
+        x, y
+    end
+
+    xstep, ystep = step(x_pix), step(y_pix)
+
+    # ── Step 2: select the best pyramid level ─────────────────────────────────
     best_idx  = 1
     best_dist = Inf
     for (k, lvl) in enumerate(s.levels)
         _, ny_k, nx_k = size(lvl)
-        dist = hypot(finest_nx / nx_k - step(x), finest_ny / ny_k - step(y))
+        nx_norm_k = s.perm_yx ? ny_k : nx_k
+        ny_norm_k = s.perm_yx ? nx_k : ny_k
+        dist = hypot(finest_nx / nx_norm_k - xstep, finest_ny / ny_norm_k - ystep)
         if dist < best_dist
             best_dist = dist
             best_idx  = k
         end
     end
 
-    level = s.levels[best_idx]
+    level      = s.levels[best_idx]
     _, ny_k, nx_k = size(level)
+    nx_norm_k  = s.perm_yx ? ny_k : nx_k
+    ny_norm_k  = s.perm_yx ? nx_k : ny_k
 
-    ci = _composite_scale_range(x, finest_nx, nx_k)
-    ri = _composite_scale_range(y, finest_ny, ny_k)
+    # ── Step 3: normalised pixel → raw level indices ───────────────────────────
+    ci_norm = _composite_scale_range(x_pix, finest_nx, nx_norm_k)
+    ri_norm = _composite_scale_range(y_pix, finest_ny, ny_norm_k)
 
-    ri_range = minimum(ri):maximum(ri)
-    ci_range = minimum(ci):maximum(ci)
+    ri_raw, ci_raw = if s.perm_yx
+        s.flip_dim3 ? (ny_k + 1 .- ci_norm) : ci_norm,
+        s.flip_dim2 ? (nx_k + 1 .- ri_norm) : ri_norm
+    else
+        s.flip_dim2 ? (ny_k + 1 .- ri_norm) : ri_norm,
+        s.flip_dim3 ? (nx_k + 1 .- ci_norm) : ci_norm
+    end
 
-    # Load all channels for this tile as a concrete (c, ny_tile, nx_tile) array.
-    block = collect(Float32.(level[:, ri_range, ci_range]))
+    # ── Step 4: read contiguous block from DiskArray ───────────────────────────
+    ri_range = minimum(ri_raw):maximum(ri_raw)
+    ci_range = minimum(ci_raw):maximum(ci_raw)
+    block    = collect(Float32.(level[s.channel_indices, ri_range, ci_range]))
+    # block shape: (n_sel, len(ri_range), len(ci_range))
 
-    ri_local = ri .- (first(ri_range) - 1)
-    ci_local = ci .- (first(ci_range) - 1)
-    tile = block[:, ri_local, ci_local]   # (c, ny_out, nx_out)
+    ri_local = ri_raw .- (first(ri_range) - 1)
+    ci_local = ci_raw .- (first(ci_range) - 1)
+    tile     = block[:, ri_local, ci_local]
+    # perm_yx=false: tile is (n_sel, ny_tile, nx_tile) — _blend_tile returns (nx, ny) ✓
+    # perm_yx=true:  ri_raw from x_pix, ci_raw from y_pix → tile is (n_sel, nx_tile, ny_tile)
+    #                permute dims 2&3 so _blend_tile sees (n_sel, ny_tile, nx_tile) ✓
 
-    # Blend to (nx_out, ny_out) Matrix{RGBf} — Makie's data[i,j] @ (x[i], y[j]).
-    return _blend_tile(tile, s.mode, s.colors, s.clip_values)
+    # ── Step 5: blend to (nx_out, ny_out) Matrix{RGBf} ────────────────────────
+    blend_tile = s.perm_yx ? permutedims(tile, (1, 3, 2)) : tile
+    return _blend_tile(blend_tile, s.mode, s.colors, s.clip_values)
 end
 
 function Base.show(io::IO, s::CompositePyramidSampler)
     nx, ny = size(s)
-    szs = ["($(size(lvl,3))×$(size(lvl,2)))" for lvl in s.levels]
+    szs = if s.perm_yx
+        ["($(size(lvl,2))×$(size(lvl,3)))" for lvl in s.levels]
+    else
+        ["($(size(lvl,3))×$(size(lvl,2)))" for lvl in s.levels]
+    end
     print(io, "CompositePyramidSampler($nx×$ny px, $(length(s.levels)) levels: $(join(szs, ", ")), $(s.mode))")
+    s.perm_yx && print(io, ", perm_yx")
+    print(io, ")")
 end
 
 # Blend a (c, ny, nx) float tile → (nx, ny) Matrix{RGBf}.
@@ -222,9 +344,9 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    composite(img::SpatialImage; colors=nothing, clip=0.999) -> AbstractMatrix{RGBf}
+    composite(img::SpatialImage; channels=nothing, colors=nothing, clip=0.999) -> AbstractMatrix{RGBf}
 
-Merge all channels of `img` into a lazy `AbstractMatrix{RGBf}`.
+Merge channels of `img` into a lazy `AbstractMatrix{RGBf}`.
 
 When `img` carries OME-Zarr pyramid levels, returns a `CompositePyramidSampler`
 that selects the right resolution level and loads only the visible tile on each
@@ -235,49 +357,65 @@ For images without a pyramid (or to force materialisation), returns a lazy
 `MappedArray` / `colorview` backed by the original data.  Pass the result to
 `collect` to materialise, or directly to `Makie.image` / `Makie.image!`.
 
-Two modes selected automatically (or overridden via `colors`):
+**Channel / colour selection** (`channels` and `colors` kwargs):
 
-- **RGB mode** — channel labels exactly `["R","G","B"]`: lazy `colorview`, zero allocation.
-- **Fluorescence mode** — all other configs: subsampled quantile pass to find
-  per-channel clip values, then lazy `mappedarray` blend.
+- Both `nothing` (default): first 3 channels, rendered red/green/blue.
+- `channels=[1,3]`: select channels by index; colours assigned from default cycle.
+- `channels=["DAPI","18S"]`: select by name (must match `channels(img)` labels).
+- `channels=[1=>:cyan, 3=>:magenta]`: index→colour pairs.
+- `colors=[:red,:blue]`: explicit colour per selected channel (overrides pair colours).
+
+Two rendering modes selected automatically:
+
+- **RGB mode** — channel labels exactly `["R","G","B"]` and no explicit kwargs:
+  lazy `colorview`, zero allocation.
+- **Fluorescence mode** — all other configs: subsampled quantile clip per channel,
+  then lazy additive `mappedarray` blend.
 
 ```julia
-# Pyramid-aware (zoom-responsive) display
-image!(ax, xen.images["morphology_focus"])  # handled automatically by image!
+# Pyramid-aware (zoom-responsive) display — handled automatically by image!
+image!(ax, xen.images["morphology_focus"])
+
+# First 3 channels: red/green/blue (default)
+image!(ax, xen.images["morphology_focus"])
+
+# Custom channel selection
+image!(ax, img; channels=[1,3], colors=[:cyan, :magenta])
+image!(ax, img; channels=["DAPI", "18S"], colors=[:blue, :green])
+image!(ax, img; channels=[1=>:red, 2=>:green, 4=>:cyan])
 
 # Explicit composite for a cropped region
 roi = view(xen, cx-500, cx+500, cy-500, cy+500)
 rgb = composite(roi.images["morphology_focus"])
 image!(ax, rgb)
-
-# Explicit colours
-rgb = composite(xen.images["morphology_focus"],
-                colors=[:blue, :green, :red, :cyan])
 ```
 """
 function composite(img::SpatialImage;
-                   colors = nothing,
+                   channels = nothing,
+                   colors   = nothing,
                    clip::Real = 0.999)
-    ch_labels = channels(img)
+    ch_labels = SpatialOmicsBase.channels(img)
     isempty(ch_labels) && error("composite: image has no channel axis")
-    n = length(ch_labels)
 
-    is_rgb = colors === nothing &&
+    is_rgb = channels === nothing && colors === nothing &&
              map(lowercase, ch_labels) == ["r", "g", "b"]
-    resolved = _resolve_composite_colors(colors, n)
 
     if !isempty(img.pyramid)
-        return CompositePyramidSampler(img; colors=colors, clip=clip)
+        return CompositePyramidSampler(img; channels=channels, colors=colors, clip=clip)
     end
 
-    return is_rgb ? _composite_rgb(img.data) :
-                    _composite_fluor(img.data, resolved, Float64(clip))
+    if is_rgb
+        return _composite_rgb(img.data)
+    end
+    indices, resolved = _resolve_channel_spec(ch_labels, channels, colors)
+    return _composite_fluor(img.data, indices, resolved, Float64(clip))
 end
 
 # SpatialElementView overload — crop first, then lazy-blend the region.
 # Always uses the non-pyramid path since we've already bounded the region.
 function composite(v::SpatialElementView{<:SpatialImage};
-                   colors = nothing,
+                   channels = nothing,
+                   colors   = nothing,
                    clip::Real = 0.999)
     e   = v.extent
     img = v.parent
@@ -295,12 +433,15 @@ function composite(v::SpatialElementView{<:SpatialImage};
 
     cropped = img.data[:, y0:y1, x0:x1]
 
-    ch_labels = channels(img)
-    n = length(ch_labels)
-    is_rgb = colors === nothing && map(lowercase, ch_labels) == ["r", "g", "b"]
-    resolved = _resolve_composite_colors(colors, n)
+    ch_labels = SpatialOmicsBase.channels(img)
+    is_rgb = channels === nothing && colors === nothing &&
+             map(lowercase, ch_labels) == ["r", "g", "b"]
 
-    return is_rgb ? _composite_rgb(cropped) : _composite_fluor(cropped, resolved, Float64(clip))
+    if is_rgb
+        return _composite_rgb(cropped)
+    end
+    indices, resolved = _resolve_channel_spec(ch_labels, channels, colors)
+    return _composite_fluor(cropped, indices, resolved, Float64(clip))
 end
 
 # ── internals (non-pyramid lazy path) ────────────────────────────────────────
@@ -315,22 +456,22 @@ function _composite_rgb(data::AbstractArray{<:Real, 3})
 end
 
 # Fluorescence path — subsampled stats pass, then lazy per-pixel blend.
+# `indices` selects which channels (1-based into data's first dim) to blend.
 function _composite_fluor(data::AbstractArray{<:Real, 3},
+                           indices::AbstractVector{Int},
                            colors::Vector{RGBf},
                            clip::Float64)
-    n_ch = size(data, 1)
+    his = Float32[_subsample_quantile(view(data, i, :, :), clip) for i in indices]
 
-    his = Float32[_subsample_quantile(view(data, i, :, :), clip) for i in 1:n_ch]
-
-    normed = [mappedarray(x -> clamp(Float32(x) / his[i], 0f0, 1f0),
+    normed = [mappedarray(x -> clamp(Float32(x) / his[j], 0f0, 1f0),
                           view(data, i, :, :))
-              for i in 1:n_ch]
+              for (j, i) in enumerate(indices)]
 
     cr = Float32[c.r for c in colors]
     cg = Float32[c.g for c in colors]
     cb = Float32[c.b for c in colors]
 
-    blend = let cr = cr, cg = cg, cb = cb, n = n_ch
+    blend = let cr = cr, cg = cg, cb = cb, n = length(indices)
         (vals::Vararg{Float32}) -> begin
             r = 0f0; g = 0f0; b = 0f0
             for i in Base.OneTo(n)
@@ -357,22 +498,29 @@ end
 # user zooms or pans.  This bypasses Makie.Resampler / HeatmapShader, which
 # would try to apply colormapping to Matrix{RGBf} and crash.
 function _pyramid_image!(ax, sampler::CompositePyramidSampler; kwargs...)
-    nx, ny = size(sampler)   # (nx, ny) finest-resolution
+    nx, ny = size(sampler)   # normalised (nx_norm, ny_norm)
+
+    # Use stored global extents when an NGFF affine transform is present;
+    # fall back to pixel coordinates 1..nx / 1..ny for identity transforms.
+    x1_full = sampler.x_range !== nothing ? Float32(sampler.x_range[1]) : 1f0
+    x2_full = sampler.x_range !== nothing ? Float32(sampler.x_range[2]) : Float32(nx)
+    y1_full = sampler.y_range !== nothing ? Float32(sampler.y_range[1]) : 1f0
+    y2_full = sampler.y_range !== nothing ? Float32(sampler.y_range[2]) : Float32(ny)
 
     # Background: fixed-extent low-res overview — never updated.
     # Anchors the data bounds so reset_limits! / Ctrl+click always resets to
-    # (1..nx) × (1..ny) regardless of where the detail layer is focused.
+    # the full image extent regardless of where the detail layer is focused.
     ov_res  = min(nx, ny, 128)
-    ov_tile = sampler(LinRange(1f0, Float32(nx), ov_res),
-                      LinRange(1f0, Float32(ny), ov_res))
-    bg = Makie.image!(ax, (1f0, Float32(nx)), (1f0, Float32(ny)), ov_tile; kwargs...)
+    ov_tile = sampler(LinRange(x1_full, x2_full, ov_res),
+                      LinRange(y1_full, y2_full, ov_res))
+    bg = Makie.image!(ax, (x1_full, x2_full), (y1_full, y2_full), ov_tile; kwargs...)
     translate!(bg, 0, 0, -1)   # behind the detail layer
 
     # Detail: starts as a higher-res overview; updated to the visible tile on release.
     init_res  = min(nx, ny, 512)
-    init_tile = sampler(LinRange(1f0, Float32(nx), init_res),
-                        LinRange(1f0, Float32(ny), init_res))
-    detail = Makie.image!(ax, (1f0, Float32(nx)), (1f0, Float32(ny)), init_tile; kwargs...)
+    init_tile = sampler(LinRange(x1_full, x2_full, init_res),
+                        LinRange(y1_full, y2_full, init_res))
+    detail = Makie.image!(ax, (x1_full, x2_full), (y1_full, y2_full), init_tile; kwargs...)
 
     # Mirror HeatmapShader's debounce: advance slow_limits only when no mouse
     # buttons are held — tile loads on release, not during drag.
@@ -390,12 +538,15 @@ function _pyramid_image!(ax, sampler::CompositePyramidSampler; kwargs...)
         xmin, ymin = Float32.(minimum(lims))
         xmax, ymax = Float32.(maximum(lims))
 
-        x1 = clamp(xmin, 1f0, Float32(nx));  x2 = clamp(xmax, 1f0, Float32(nx))
-        y1 = clamp(ymin, 1f0, Float32(ny));  y2 = clamp(ymax, 1f0, Float32(ny))
+        x1 = clamp(xmin, x1_full, x2_full);  x2 = clamp(xmax, x1_full, x2_full)
+        y1 = clamp(ymin, y1_full, y2_full);  y2 = clamp(ymax, y1_full, y2_full)
         (x2 <= x1 || y2 <= y1) && return
 
-        res_x = clamp(round(Int, x2 - x1), 64, 2048)
-        res_y = clamp(round(Int, y2 - y1), 64, 2048)
+        # Resolution proportional to tile size in normalised-pixel units.
+        pix_per_unit_x = (nx - 1) / (x2_full - x1_full)
+        pix_per_unit_y = (ny - 1) / (y2_full - y1_full)
+        res_x = clamp(round(Int, (x2 - x1) * pix_per_unit_x), 64, 2048)
+        res_y = clamp(round(Int, (y2 - y1) * pix_per_unit_y), 64, 2048)
         tile  = sampler(LinRange(x1, x2, res_x), LinRange(y1, y2, res_y))
 
         detail[1][] = Makie.EndPoints{Float32}(x1, x2)
@@ -420,35 +571,38 @@ zoom/pan event.
 For images without a pyramid, calls `composite(img)` and collects at render time.
 """
 function Makie.image(img::SpatialImage;
-                     colors = nothing, clip = 0.999,
+                     channels = nothing, colors = nothing, clip = 0.999,
                      axis = (;), figure = (;), kwargs...)
     if !isempty(img.pyramid)
         fig = Figure(; figure...)
         ax  = Axis(fig[1, 1]; yreversed=true, axis...)
-        sampler = CompositePyramidSampler(img; colors=colors, clip=clip)
+        sampler = CompositePyramidSampler(img; channels=channels, colors=colors, clip=clip)
         plt = _pyramid_image!(ax, sampler; kwargs...)
         return Makie.FigureAxisPlot(fig, ax, plt)
     else
-        rgb = composite(img; colors=colors, clip=clip)
+        rgb = composite(img; channels=channels, colors=colors, clip=clip)
         ny, nx = size(rgb)
         return Makie.image(1..nx, 1..ny, permutedims(collect(rgb));
                            axis=axis, figure=figure, kwargs...)
     end
 end
 
-function Makie.image!(ax, img::SpatialImage; colors=nothing, clip=0.999, kwargs...)
+function Makie.image!(ax, img::SpatialImage;
+                      channels=nothing, colors=nothing, clip=0.999, kwargs...)
     if !isempty(img.pyramid)
-        sampler = CompositePyramidSampler(img; colors=colors, clip=clip)
+        sampler = CompositePyramidSampler(img; channels=channels, colors=colors, clip=clip)
         return _pyramid_image!(ax, sampler; kwargs...)
     else
-        rgb = composite(img; colors=colors, clip=clip)
-        ny, nx = size(rgb)
-        return Makie.image!(ax, 1..nx, 1..ny, permutedims(collect(rgb)); kwargs...)
+        rgb = composite(img; channels=channels, colors=colors, clip=clip)
+        # rgb shape is (ny, nx) — non-pyramid path always pixel coords
+        ny_rgb, nx_rgb = size(rgb)
+        return Makie.image!(ax, 1..nx_rgb, 1..ny_rgb, permutedims(collect(rgb)); kwargs...)
     end
 end
 
-function Makie.image!(ax, v::SpatialElementView{<:SpatialImage}; colors=nothing, clip=0.999, kwargs...)
-    rgb = composite(v; colors=colors, clip=clip)
+function Makie.image!(ax, v::SpatialElementView{<:SpatialImage};
+                      channels=nothing, colors=nothing, clip=0.999, kwargs...)
+    rgb = composite(v; channels=channels, colors=colors, clip=clip)
     e   = v.extent
     ny, nx = size(rgb)
     result = Makie.image!(ax, e.xmin..e.xmax, e.ymin..e.ymax,

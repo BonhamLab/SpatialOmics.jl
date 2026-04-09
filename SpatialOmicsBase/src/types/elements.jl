@@ -100,9 +100,17 @@ function _omero_channel_labels(meta::Dict{String,Any}, n::Int)
     zarr_attrs === nothing && return nothing
     haskey(zarr_attrs, :attributes) || return nothing
     attrs = zarr_attrs.attributes
-    haskey(attrs, :omero) || return nothing
-    haskey(attrs.omero, :channels) || return nothing
-    ch = attrs.omero.channels
+    # OME-NGFF stores omero under attributes.ome.omero; fall back to
+    # attributes.omero for files that omit the intermediate :ome key.
+    omero = if haskey(attrs, :ome) && haskey(attrs.ome, :omero)
+        attrs.ome.omero
+    elseif haskey(attrs, :omero)
+        attrs.omero
+    else
+        return nothing
+    end
+    haskey(omero, :channels) || return nothing
+    ch = omero.channels
     length(ch) == n || return nothing
     haskey(first(ch), :label) || return nothing
     return [String(c.label) for c in ch]

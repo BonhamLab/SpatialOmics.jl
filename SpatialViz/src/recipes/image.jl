@@ -41,13 +41,17 @@ end
 # ---------------------------------------------------------------------------
 
 function Makie.convert_arguments(P::Type{<:Heatmap}, s::ImagePyramidSampler)
-    nx, ny = size(s)   # size(s) = (nx, ny) — Makie heatmap convention
-    return ((1f0, Float32(nx)), (1f0, Float32(ny)), s)
+    nx, ny = size(s)
+    x1, x2 = s.x_range !== nothing ? s.x_range : (1.0, Float64(nx))
+    y1, y2 = s.y_range !== nothing ? s.y_range : (1.0, Float64(ny))
+    return ((Float32(x1), Float32(x2)), (Float32(y1), Float32(y2)), s)
 end
 
 function Makie.convert_arguments(P::Type{<:Heatmap}, x, y, s::ImagePyramidSampler)
-    nx, ny = size(s)   # size(s) = (nx, ny) — Makie heatmap convention
-    return ((1f0, Float32(nx)), (1f0, Float32(ny)), s)
+    nx, ny = size(s)
+    x1, x2 = s.x_range !== nothing ? s.x_range : (1.0, Float64(nx))
+    y1, y2 = s.y_range !== nothing ? s.y_range : (1.0, Float64(ny))
+    return ((Float32(x1), Float32(x2)), (Float32(y1), Float32(y2)), s)
 end
 
 # ---------------------------------------------------------------------------

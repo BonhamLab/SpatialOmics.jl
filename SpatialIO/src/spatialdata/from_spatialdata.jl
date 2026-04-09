@@ -97,6 +97,12 @@ end
 # Multiscale NGFF images: the group contains numbered sub-groups (0, 1, 2, …)
 # for each pyramid level.  We expose level 0 as a lazy ZarrV3Array and stash
 # the full metadata for round-trip writing.
+#
+# If the top-level coordinateTransformations entry is an affine that involves
+# an axis permutation or reflection (common for H&E images in Xenium SpatialData
+# stores), we detect the normalisation parameters and store them in image
+# metadata so that SpatialViz can render the image in the correct global
+# coordinate space for overlay with other elements.
 
 function _read_sd_image(path::String)::SpatialImage
     meta = _zread_meta(path)
@@ -125,7 +131,137 @@ function _read_sd_image(path::String)::SpatialImage
     end
     ax_nt = _axes_namedtuple(axes_meta)
 
-    return SpatialImage(arr, pyramid, ax_nt, Dict{String,Any}("zarr_attrs" => meta))
+    img_meta = Dict{String,Any}("zarr_attrs" => meta)
+
+    # Parse coordinate transform; store normalisation parameters in metadata.
+    _apply_ngff_transform!(img_meta, meta, size(arr))
+
+    return SpatialImage(arr, pyramid, ax_nt, img_meta)
+end
+
+# ─── NGFF coordinate-transform helpers ────────────────────────────────────────
+
+# Walk the standard NGFF multiscales metadata path (ome.multiscales or multiscales).
+function _get_multiscales_meta(meta)
+    haskey(meta, :attributes) || return nothing
+    a = meta.attributes
+    if haskey(a, :ome) && haskey(a.ome, :multiscales) && !isempty(a.ome.multiscales)
+        return a.ome.multiscales[1]
+    elseif haskey(a, :multiscales) && !isempty(a.multiscales)
+        return a.multiscales[1]
+    end
+    return nothing
+end
+
+# Parse the first top-level coordinateTransformations entry.
+# Returns (type, data, in_axes, out_axes) or nothing.
+function _parse_top_transform(ms)
+    haskey(ms, :coordinateTransformations) || return nothing
+    ct = ms.coordinateTransformations
+    isempty(ct) && return nothing
+    t      = ct[1]
+    ttype  = String(t.type)
+    in_ax  = haskey(t, :input)  ? [String(a.name) for a in t.input.axes]  : nothing
+    out_ax = haskey(t, :output) ? [String(a.name) for a in t.output.axes] : nothing
+    if ttype == "identity"
+        return ("identity", nothing, in_ax, out_ax)
+    elseif ttype == "scale"
+        return ("scale", Float64.(t.scale), in_ax, out_ax)
+    elseif ttype == "affine"
+        n_rows = length(t.affine)
+        n_cols = length(t.affine[1])
+        A = Matrix{Float64}(undef, n_rows, n_cols)
+        for i in 1:n_rows, j in 1:n_cols
+            A[i, j] = Float64(t.affine[i][j])
+        end
+        return ("affine", A, in_ax, out_ax)
+    else
+        return nothing
+    end
+end
+
+# Inspect the image's NGFF coordinateTransformations and, if a non-trivial
+# affine transform is found, write normalisation parameters into `img_meta`:
+#   "x_range", "y_range"  — global extent as (Float64, Float64)
+#   "perm_yx"             — Bool: local y maps to global x (axes swapped)
+#   "flip_dim2"           — Bool: flip post-permutation y dimension
+#   "flip_dim3"           — Bool: flip post-permutation x dimension
+#
+# The +1 offset on global coordinates converts 0-based pixel-centre values
+# (used by the NGFF affine) to 1-based Makie pixel coordinates so that
+# identity-transform images (rendered at 1..nx) align with affine-transform
+# images in the same Makie axis.
+function _apply_ngff_transform!(img_meta::Dict{String,Any}, zarr_meta, arr_shape::Tuple)
+    ndims_arr = length(arr_shape)
+    ndims_arr >= 3 || return   # expect at least (c, ny, nx)
+
+    ms = _get_multiscales_meta(zarr_meta)
+    ms === nothing && return
+
+    result = _parse_top_transform(ms)
+    result === nothing && return
+
+    ttype, tdata, in_axes, out_axes = result
+    ttype == "identity" && return
+
+    if ttype == "scale"
+        # Pure scale: physical extents differ from pixel coords.
+        # Store extents using the scale factor: pixel i (1-based) is at s*(i-1)+1.
+        in_axes === nothing && return
+        y_dim = findfirst(==("y"), in_axes)
+        x_dim = findfirst(==("x"), in_axes)
+        (y_dim === nothing || x_dim === nothing) && return
+        ny_l = Float64(arr_shape[end-1])
+        nx_l = Float64(arr_shape[end])
+        sy = Float64(tdata[y_dim]);  sx = Float64(tdata[x_dim])
+        img_meta["x_range"]   = (1.0, sx * (nx_l - 1) + 1.0)
+        img_meta["y_range"]   = (1.0, sy * (ny_l - 1) + 1.0)
+        img_meta["perm_yx"]   = false
+        img_meta["flip_dim2"] = false
+        img_meta["flip_dim3"] = false
+        return
+    end
+
+    ttype == "affine" || return
+    (in_axes === nothing || out_axes === nothing) && return
+
+    in_y  = findfirst(==("y"), in_axes);  in_x  = findfirst(==("x"), in_axes)
+    out_y = findfirst(==("y"), out_axes); out_x = findfirst(==("x"), out_axes)
+    (in_y === nothing || in_x === nothing ||
+     out_y === nothing || out_x === nothing) && return
+
+    A = tdata   # (n_out × n_in+1): rows=output dims, cols=input dims + translation
+
+    # 2×2 spatial sub-matrix: output y/x rows × input y/x cols.
+    Ayy = A[out_y, in_y];  Ayx = A[out_y, in_x];  ty = A[out_y, end]
+    Axy = A[out_x, in_y];  Axx = A[out_x, in_x];  tx = A[out_x, end]
+
+    # Does y_global mainly come from x_local? (axis permutation)
+    perm_yx   = abs(Ayx) > abs(Ayy)
+    # Sign of dominant coefficient → flip direction
+    flip_dim2 = perm_yx ? (Ayx < 0) : (Ayy < 0)   # flip post-permutation y
+    flip_dim3 = perm_yx ? (Axy < 0) : (Axx < 0)   # flip post-permutation x
+
+    # Compute global extents from the four image corners (0-based pixel centres).
+    ny_l = Float64(arr_shape[end-1])
+    nx_l = Float64(arr_shape[end])
+    yl   = ny_l - 1.0
+    xl   = nx_l - 1.0
+    corners_x = [Axy*0  + Axx*0  + tx,
+                 Axy*yl + Axx*0  + tx,
+                 Axy*0  + Axx*xl + tx,
+                 Axy*yl + Axx*xl + tx]
+    corners_y = [Ayy*0  + Ayx*0  + ty,
+                 Ayy*yl + Ayx*0  + ty,
+                 Ayy*0  + Ayx*xl + ty,
+                 Ayy*yl + Ayx*xl + ty]
+
+    # +1 shifts from 0-based pixel centres to 1-based Makie pixel coordinates.
+    img_meta["x_range"]   = (minimum(corners_x) + 1.0, maximum(corners_x) + 1.0)
+    img_meta["y_range"]   = (minimum(corners_y) + 1.0, maximum(corners_y) + 1.0)
+    img_meta["perm_yx"]   = perm_yx
+    img_meta["flip_dim2"] = flip_dim2
+    img_meta["flip_dim3"] = flip_dim3
 end
 
 # ─── Labels reader ────────────────────────────────────────────────────────────

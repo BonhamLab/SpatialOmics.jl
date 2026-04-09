@@ -42,6 +42,18 @@ struct ImagePyramidSampler{T} <: AbstractMatrix{T}
     # Stored (ny, nx): levels[1] is finest, levels[end] is coarsest.
     # Vector{Any} to accommodate heterogeneous DiskArray concrete types.
     levels::Vector{Any}
+    # Global spatial extents (in physical / global-coordinate-system units).
+    # Nothing → use pixel coordinates 1..nx / 1..ny (identity transform).
+    x_range::Union{NTuple{2,Float64}, Nothing}
+    y_range::Union{NTuple{2,Float64}, Nothing}
+    # Coordinate normalisation flags (set when the image has an affine transform
+    # to the global coordinate system that involves an axis swap or reflection).
+    # perm_yx  : local y-axis maps to global x (and local x → global y).
+    # flip_dim2: flip the post-permutation y dimension (global-y direction).
+    # flip_dim3: flip the post-permutation x dimension (global-x direction).
+    perm_yx::Bool
+    flip_dim2::Bool
+    flip_dim3::Bool
 end
 
 """
@@ -49,6 +61,11 @@ end
 
 Slice `channel` from each pyramid level of `img` (OME-Zarr `(c, y, x)` layout).
 The slice is a lazy `view` — no pixel data is loaded until the sampler is called.
+
+If `img.metadata` contains `"x_range"`, `"y_range"`, `"perm_yx"`, `"flip_dim2"`,
+and/or `"flip_dim3"` (set by the SpatialData reader when an affine coordinate
+transform is present), the sampler will render in the global coordinate system
+so that overlaid images align correctly.
 """
 function ImagePyramidSampler(img::SpatialImage{T}, channel::Int=1) where T
     _slice(arr) = ndims(arr) == 3 ? view(arr, channel, :, :) :   # (ny, nx) view
@@ -58,19 +75,42 @@ function ImagePyramidSampler(img::SpatialImage{T}, channel::Int=1) where T
     for lvl in img.pyramid
         push!(levels, _slice(lvl))
     end
-    return ImagePyramidSampler{T}(levels)
+    xr  = get(img.metadata, "x_range",   nothing)
+    yr  = get(img.metadata, "y_range",   nothing)
+    pyx = get(img.metadata, "perm_yx",   false)
+    fd2 = get(img.metadata, "flip_dim2", false)
+    fd3 = get(img.metadata, "flip_dim3", false)
+    xrt = xr === nothing ? nothing : (Float64(xr[1]), Float64(xr[2]))
+    yrt = yr === nothing ? nothing : (Float64(yr[1]), Float64(yr[2]))
+    return ImagePyramidSampler{T}(levels, xrt, yrt, pyx, fd2, fd3)
 end
 
 # ── AbstractMatrix interface ───────────────────────────────────────────────────
-# Report (nx, ny) so Makie creates correct (width × height) axis ranges.
-# Internally levels are (ny, nx), so we swap.
+# Report (nx_norm, ny_norm) so Makie creates correct (width × height) axis ranges.
+# Internally levels are (ny_raw, nx_raw); if perm_yx is set the normalised
+# dimensions are swapped relative to the raw storage.
 function Base.size(s::ImagePyramidSampler)
-    ny, nx = size(s.levels[1])
-    return (nx, ny)
+    ny, nx = size(s.levels[1])   # raw (ny_raw, nx_raw)
+    # When perm_yx: normalised nx = ny_raw, normalised ny = nx_raw.
+    return s.perm_yx ? (ny, nx) : (nx, ny)
 end
 
-# Scalar getindex: transpose access into the (ny, nx) finest level.
-Base.getindex(s::ImagePyramidSampler, i::Int, j::Int) = s.levels[1][j, i]
+# Scalar getindex: map normalised (xi, yi) to raw (row, col) accounting for
+# any axis swap or flip, then read from the finest level.
+function Base.getindex(s::ImagePyramidSampler, xi::Int, yi::Int)
+    finest_nx, finest_ny = size(s)
+    raw_row, raw_col = if s.perm_yx
+        # xi (x-norm) → raw row;  yi (y-norm) → raw col
+        r = s.flip_dim3 ? (finest_nx + 1 - xi) : xi
+        c = s.flip_dim2 ? (finest_ny + 1 - yi) : yi
+        r, c
+    else
+        r = s.flip_dim2 ? (finest_ny + 1 - yi) : yi
+        c = s.flip_dim3 ? (finest_nx + 1 - xi) : xi
+        r, c
+    end
+    return s.levels[1][raw_row, raw_col]
+end
 
 # ── Callable interface for Makie.Resampler ────────────────────────────────────
 
@@ -79,8 +119,9 @@ Base.getindex(s::ImagePyramidSampler, i::Int, j::Int) = s.levels[1][j, i]
 
 Called by `Makie.Resampler` on every zoom/pan event.
 
-`x` is a range of column (x / horizontal) indices in the finest-level space
-`[1..nx]`; `y` is a range of row (y / vertical) indices in `[1..ny]`.
+`x` and `y` are ranges in the coordinate system reported by `convert_arguments`
+— either pixel coordinates `[1..nx]` / `[1..ny]` (identity transform) or global
+physical coordinates when the image has an affine transform.
 
 Step size encodes zoom level: large step → coarser level; small step → finer.
 
@@ -88,19 +129,29 @@ Returns a `(length(x), length(y))` matrix — Makie places `result[i,j]` at
 data coordinate `(x[i], y[j])`.
 """
 function (s::ImagePyramidSampler)(x::LinRange, y::LinRange)
-    xstep, ystep = step(x), step(y)
-    # finest level size in (nx, ny) terms (same convention as Base.size)
-    finest_nx, finest_ny = size(s)
+    finest_nx, finest_ny = size(s)   # normalised (nx_norm, ny_norm)
 
-    # Select the pyramid level whose pixel step best matches the requested zoom.
-    # For a level stored as (ny_k, nx_k):
-    #   col pixel step = finest_nx / nx_k  (in finest-level x/col coordinates)
-    #   row pixel step = finest_ny / ny_k  (in finest-level y/row coordinates)
+    # ── Step 1: map global physical coords → normalised pixel [1..finest_N] ──
+    x_pix, y_pix = if s.x_range !== nothing
+        xmin, xmax = s.x_range;  ymin, ymax = s.y_range
+        sx = (finest_nx - 1) / (xmax - xmin)
+        sy = (finest_ny - 1) / (ymax - ymin)
+        LinRange(1.0 + (first(x) - xmin) * sx, 1.0 + (last(x) - xmin) * sx, length(x)),
+        LinRange(1.0 + (first(y) - ymin) * sy, 1.0 + (last(y) - ymin) * sy, length(y))
+    else
+        x, y
+    end
+
+    xstep, ystep = step(x_pix), step(y_pix)
+
+    # ── Step 2: select the best pyramid level ─────────────────────────────────
     best_idx  = 1
     best_dist = Inf
     for (i, lvl) in enumerate(s.levels)
         ny_k, nx_k = size(lvl)
-        dist = hypot(finest_nx / nx_k - xstep, finest_ny / ny_k - ystep)
+        nx_norm_k = s.perm_yx ? ny_k : nx_k   # normalised size of this level
+        ny_norm_k = s.perm_yx ? nx_k : ny_k
+        dist = hypot(finest_nx / nx_norm_k - xstep, finest_ny / ny_norm_k - ystep)
         if dist < best_dist
             best_dist = dist
             best_idx  = i
@@ -109,27 +160,41 @@ function (s::ImagePyramidSampler)(x::LinRange, y::LinRange)
 
     level      = s.levels[best_idx]
     ny_k, nx_k = size(level)
+    nx_norm_k  = s.perm_yx ? ny_k : nx_k
+    ny_norm_k  = s.perm_yx ? nx_k : ny_k
 
-    # Map x (col range in finest coords [1..nx]) → column indices in this level.
-    ci = _scale_range(x, finest_nx, nx_k)
+    # ── Step 3: normalised pixel → raw level indices ───────────────────────────
+    # ci_norm: normalised column indices [1..nx_norm_k] — represent x_global
+    # ri_norm: normalised row    indices [1..ny_norm_k] — represent y_global
+    ci_norm = _scale_range(x_pix, finest_nx, nx_norm_k)
+    ri_norm = _scale_range(y_pix, finest_ny, ny_norm_k)
 
-    # Map y (row range in finest coords [1..ny]) → row indices in this level.
-    ri = _scale_range(y, finest_ny, ny_k)
+    # Map (ci_norm, ri_norm) to raw (ri_raw, ci_raw) in the stored (ny_k, nx_k) level.
+    # perm_yx swaps which normalised axis maps to which raw axis; flip reverses an axis.
+    ri_raw, ci_raw = if s.perm_yx
+        # x_norm (ci_norm) → raw row;  y_norm (ri_norm) → raw col
+        s.flip_dim3 ? (ny_k + 1 .- ci_norm) : ci_norm,
+        s.flip_dim2 ? (nx_k + 1 .- ri_norm) : ri_norm
+    else
+        s.flip_dim2 ? (ny_k + 1 .- ri_norm) : ri_norm,
+        s.flip_dim3 ? (nx_k + 1 .- ci_norm) : ci_norm
+    end
 
-    # Read a contiguous block using UnitRange indexing — DiskArray backends
-    # (Zarr, HDF5) handle UnitRange reads correctly across chunk boundaries.
-    # Fancy Vector{Int} indexing can produce stripe artifacts due to
-    # non-contiguous multi-chunk access patterns.
-    ri_range = minimum(ri):maximum(ri)
-    ci_range = minimum(ci):maximum(ci)
-    block = collect(Float32.(level[ri_range, ci_range]))  # materialise tile
+    # ── Step 4: read contiguous block from DiskArray (ascending UnitRanges) ───
+    ri_range = minimum(ri_raw):maximum(ri_raw)
+    ci_range = minimum(ci_raw):maximum(ci_raw)
+    block    = collect(Float32.(level[ri_range, ci_range]))
 
-    # Remap ri/ci to local indices within the loaded block, then subsample.
-    ri_local = ri .- (first(ri_range) - 1)
-    ci_local = ci .- (first(ci_range) - 1)
+    # ── Step 5: local indexing + orient for Makie ─────────────────────────────
+    ri_local = ri_raw .- (first(ri_range) - 1)
+    ci_local = ci_raw .- (first(ci_range) - 1)
 
-    # block[ri_local, ci_local] is (length(y), length(x)); transpose → (length(x), length(y)).
-    return permutedims(block[ri_local, ci_local])
+    # perm_yx=false: ri_raw from y_pix, ci_raw from x_pix
+    #   block[ri_local, ci_local] is (ny_tile, nx_tile) → permutedims → (nx_tile, ny_tile) ✓
+    # perm_yx=true:  ri_raw from x_pix (ci_norm), ci_raw from y_pix (ri_norm)
+    #   block[ri_local, ci_local] is (nx_tile, ny_tile) — already Makie-ready ✓
+    return s.perm_yx ? block[ri_local, ci_local] :
+                       permutedims(block[ri_local, ci_local])
 end
 
 # Scale a LinRange from finest-level coordinates [1..finest_N] to level
@@ -145,6 +210,13 @@ end
 
 function Base.show(io::IO, s::ImagePyramidSampler{T}) where T
     nx, ny = size(s)
-    szs = ["($(size(lvl,2))×$(size(lvl,1)))" for lvl in s.levels]
-    print(io, "ImagePyramidSampler{$T}($nx×$ny px, $(length(s.levels)) levels: $(join(szs, ", ")))")
+    # Display normalised pixel dimensions (accounting for perm_yx).
+    szs = if s.perm_yx
+        ["($(size(lvl,1))×$(size(lvl,2)))" for lvl in s.levels]
+    else
+        ["($(size(lvl,2))×$(size(lvl,1)))" for lvl in s.levels]
+    end
+    print(io, "ImagePyramidSampler{$T}($nx×$ny px, $(length(s.levels)) levels: $(join(szs, ", "))")
+    s.perm_yx && print(io, ", perm_yx")
+    print(io, ")")
 end
