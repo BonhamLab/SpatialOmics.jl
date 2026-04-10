@@ -162,10 +162,7 @@ crop(pts::SpatialPoints, xmin::Real, xmax::Real, ymin::Real, ymax::Real,
     crop(pts, SpatialExtent(xmin, xmax, ymin, ymax, cs))
 
 function crop(pts::SpatialPoints{T}, ext::SpatialExtent) where T
-    x = pts.coordinates[:, 1]
-    y = pts.coordinates[:, 2]
-    mask = (x .>= ext.xmin) .& (x .<= ext.xmax) .&
-           (y .>= ext.ymin) .& (y .<= ext.ymax)
+    mask = _points_extent_mask(pts, ext)
     return SpatialPoints(pts.coordinates[mask, :], pts.features[mask, :], pts.metadata)
 end
 
@@ -243,6 +240,36 @@ Base.view(el::SpatialElement, ext::SpatialExtent) = SpatialElementView(el, ext)
 function Base.getproperty(v::SpatialElementView, s::Symbol)
     s in (:parent, :extent) && return getfield(v, s)
     return getproperty(getfield(v, :parent), s)
+end
+
+# ---------------------------------------------------------------------------
+# Filtered property access for SpatialPoints views
+#
+# Accessing .features or .coordinates on a SpatialElementView{<:SpatialPoints}
+# returns a spatially-filtered sub-view (SubDataFrame / SubMatrix) rather than
+# the full parent data.  No data is copied; cost is one O(n) mask pass.
+# Call crop(v) to obtain a concrete filtered copy when downstream code requires
+# a plain DataFrame or Matrix.
+# ---------------------------------------------------------------------------
+
+function Base.getproperty(v::SpatialElementView{<:SpatialPoints}, s::Symbol)
+    s in (:parent, :extent) && return getfield(v, s)
+    if s === :coordinates || s === :features
+        pts  = getfield(v, :parent)
+        ext  = getfield(v, :extent)
+        mask = _points_extent_mask(pts, ext)
+        s === :coordinates && return view(pts.coordinates, mask, :)
+        return view(pts.features, mask, :)
+    end
+    return getproperty(getfield(v, :parent), s)
+end
+
+# Reusable mask helper (also called from crop).
+function _points_extent_mask(pts::SpatialPoints, ext::SpatialExtent)
+    x = pts.coordinates[:, 1]
+    y = pts.coordinates[:, 2]
+    return (x .>= ext.xmin) .& (x .<= ext.xmax) .&
+           (y .>= ext.ymin) .& (y .<= ext.ymax)
 end
 
 # extent of a view IS the crop box (not the parent's full extent).

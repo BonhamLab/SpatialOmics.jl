@@ -51,14 +51,14 @@ export ImagePyramidSampler
 # Includes (one file per logical group)
 # ---------------------------------------------------------------------------
 
-include("types/elements.jl")
-include("types/coordinate_systems.jl")
-include("types/transformations.jl")
-include("types/dataset.jl")
-include("types/view.jl")
-include("types/pyramid.jl")
-include("transforms/affine.jl")
-include("utils/metadata.jl")
-include("utils/chunking.jl")
+include("elements.jl")
+include("coordinate_systems.jl")
+include("transformations.jl")
+include("dataset.jl")
+include("view.jl")
+include("pyramid.jl")
+include("affine.jl")
+include("metadata.jl")
+include("chunking.jl")
 
 end # module SpatialOmicsBase
