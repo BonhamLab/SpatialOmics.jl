@@ -13,6 +13,8 @@ module SpatialOmicsBase
 
 using DiskArrays
 using DataFrames
+using GeometryBasics
+using GeometryOps
 
 # ---------------------------------------------------------------------------
 # Exports
@@ -29,6 +31,7 @@ export spatial_dataset
 
 export images, labels, points, shapes, tables, metadata
 export channels, channels!
+export region, region_key, instance_key
 
 # Coordinate utilities
 export transform_coordinates, compose_transformations, invert_transformation
@@ -39,7 +42,7 @@ export get_metadata, set_metadata!
 # Spatial query primitives
 export SpatialExtent
 export SpatialElementView, SpatialDatasetView
-export extent, intersects, crop
+export extent, intersects, crop, subset
 
 # Pyramid sampler (for Makie.Resampler integration)
 export ImagePyramidSampler

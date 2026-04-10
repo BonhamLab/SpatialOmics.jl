@@ -102,6 +102,8 @@ Base.setindex!(ds::SpatialDataset, tbl::SpatialTable,   k::String) = (ds.tables[
 """
     images(ds)              -> Dict{String, SpatialImage}
     images(ds, name)        -> SpatialImage
+    images(roi)             -> ViewDict (scoped to roi.extent)
+    images(roi, name)       -> SpatialElementView{SpatialImage}
 """
 images(ds::SpatialDataset)              = ds.images
 images(ds::SpatialDataset, k::String)   = ds.images[k]

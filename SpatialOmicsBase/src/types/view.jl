@@ -172,12 +172,46 @@ end
 """
     crop(shp::SpatialShapes, ext::SpatialExtent) -> SpatialShapes
 
-Return shapes whose bounding boxes overlap `ext`. (Fast pre-filter using
-centroid or first vertex; exact intersection deferred to Phase 2.)
+Return shapes whose centroids fall within `ext`.
+
+Filter priority:
+1. `x_centroid`/`y_centroid` feature columns when present (Xenium, CosMx, …).
+2. Centroids computed from the geometry objects via GeometryOps:
+   - `Polygon`: `GeometryOps.centroid`.
+   - `Circle`: the `.center` field directly.
+3. Falls back to returning all shapes if no centroids can be determined.
 """
 function crop(shp::SpatialShapes, ext::SpatialExtent)
-    return shp  # full geometric intersection deferred
+    feats = shp.features
+    if "x_centroid" in names(feats) && "y_centroid" in names(feats)
+        x, y = feats.x_centroid, feats.y_centroid
+        mask = (x .>= ext.xmin) .& (x .<= ext.xmax) .&
+               (y .>= ext.ymin) .& (y .<= ext.ymax)
+        return SpatialShapes(shp.geometries[mask], feats[mask, :], shp.metadata)
+    end
+    # Fallback: compute centroids from geometry objects.
+    geoms = shp.geometries
+    n = length(geoms)
+    mask = Vector{Bool}(undef, n)
+    any_geom = false
+    for i in 1:n
+        cxy = _geom_centroid(geoms[i])
+        if cxy !== nothing
+            cx, cy = cxy
+            mask[i] = ext.xmin <= cx <= ext.xmax && ext.ymin <= cy <= ext.ymax
+            any_geom = true
+        else
+            mask[i] = false
+        end
+    end
+    any_geom || return shp
+    return SpatialShapes(geoms[mask], feats[mask, :], shp.metadata)
 end
+
+_geom_centroid(::Nothing)                   = nothing
+_geom_centroid(g::GeometryBasics.Circle)    = (Float64(g.center[1]), Float64(g.center[2]))
+_geom_centroid(g::GeometryBasics.Polygon)   = GeometryOps.centroid(g)
+_geom_centroid(::Any)                       = nothing
 
 # ---------------------------------------------------------------------------
 # SpatialElementView — lazy view of a single element
@@ -203,6 +237,19 @@ struct SpatialElementView{T<:SpatialElement}
 end
 
 Base.view(el::SpatialElement, ext::SpatialExtent) = SpatialElementView(el, ext)
+
+# Transparent field access: v.data, v.coordinates, v.metadata, etc. delegate to parent.
+# v.parent and v.extent are the view's own fields and are not forwarded.
+function Base.getproperty(v::SpatialElementView, s::Symbol)
+    s in (:parent, :extent) && return getfield(v, s)
+    return getproperty(getfield(v, :parent), s)
+end
+
+# extent of a view IS the crop box (not the parent's full extent).
+extent(v::SpatialElementView) = v.extent
+
+# crop materialises a view: apply the stored extent to the parent element.
+crop(v::SpatialElementView) = crop(v.parent, v.extent)
 
 function Base.show(io::IO, v::SpatialElementView{T}) where T
     print(io, "view(", T, ", ", v.extent, ")")
@@ -318,3 +365,80 @@ Base.getindex(ds::SpatialDataset, y::AbstractRange, x::AbstractRange) =
 
 Base.getindex(el::SpatialElement, y::AbstractRange, x::AbstractRange) =
     view(el, y, x)
+
+# ---------------------------------------------------------------------------
+# Accessor functions on SpatialDatasetView
+#
+# images/points/labels/shapes/tables work on both SpatialDataset and
+# SpatialDatasetView.  The view variants delegate to getproperty so the
+# existing ViewDict / SpatialElementView machinery is reused.
+# ---------------------------------------------------------------------------
+
+# Element-level accessors on SpatialElementView — delegate to parent.
+channels(v::SpatialElementView{<:SpatialImage})                          = channels(v.parent)
+channels!(v::SpatialElementView{<:SpatialImage}, labels::Vector{String}) = channels!(v.parent, labels)
+
+region(v::SpatialElementView{<:SpatialTable})       = region(v.parent)
+region_key(v::SpatialElementView{<:SpatialTable})   = region_key(v.parent)
+instance_key(v::SpatialElementView{<:SpatialTable}) = instance_key(v.parent)
+
+images(v::SpatialDatasetView)            = v.images
+images(v::SpatialDatasetView, k::String) = v.images[k]
+
+labels(v::SpatialDatasetView)            = v.labels
+labels(v::SpatialDatasetView, k::String) = v.labels[k]
+
+points(v::SpatialDatasetView)            = v.points
+points(v::SpatialDatasetView, k::String) = v.points[k]
+
+shapes(v::SpatialDatasetView)            = v.shapes
+shapes(v::SpatialDatasetView, k::String) = v.shapes[k]
+
+tables(v::SpatialDatasetView)            = v.tables
+tables(v::SpatialDatasetView, k::String) = v.tables[k]
+
+# ---------------------------------------------------------------------------
+# subset — spatially filter a table to observations within a view's extent
+# ---------------------------------------------------------------------------
+
+"""
+    subset(roi::SpatialDatasetView, tbl_key::String) -> SpatialTable
+
+Return a `SpatialTable` containing only the rows whose linked spatial
+instances (cells, spots) fall within `roi.extent`.
+
+The linkage is read from the table's SpatialData NGFF metadata:
+- `region(tbl)` identifies the shapes element by name
+- `instance_key(tbl)` names the obs column (e.g. `"cell_id"`) used to match
+
+The linked shapes element is cropped to the extent (centroid-based), and the
+table is filtered to rows whose `instance_key` value appears in the cropped
+shapes' features. Returns the unfiltered table if linkage metadata is absent
+or the linked element is not found.
+
+```julia
+roi       = view(xen, lims)
+cell_tbl  = subset(roi, "table")        # SpatialTable with cells in ROI
+cell_ids  = cell_tbl.obs.cell_id        # IDs of those cells
+expr_mat  = cell_tbl.data               # count matrix (ncells × ngenes)
+gene_names = cell_tbl.var.gene_name     # or names(cell_tbl.var)
+```
+"""
+function subset(roi::SpatialDatasetView, tbl_key::String)
+    ds  = roi.dataset
+    tbl = tables(ds, tbl_key)
+
+    rg = region(tbl)
+    rg === nothing && return tbl
+
+    ik = instance_key(tbl)
+
+    # Locate the linked shapes element (labels-linked tables deferred)
+    haskey(ds.shapes, rg) || return tbl
+
+    cropped = crop(SpatialElementView(ds.shapes[rg], roi.extent))
+    ids     = Set(cropped.features[!, ik])
+
+    mask = tbl.obs[!, ik] .∈ Ref(ids)
+    return SpatialTable(tbl.data[mask, :], tbl.obs[mask, :], tbl.var, tbl.metadata)
+end

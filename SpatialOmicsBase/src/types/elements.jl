@@ -234,3 +234,44 @@ function Base.show(io::IO, tbl::SpatialTable)
     n_obs, n_var = size(tbl.data)
     print(io, "SpatialTable($n_obs obs × $n_var vars, obs: [", _cols_str(tbl.obs), "])")
 end
+
+# ---------------------------------------------------------------------------
+# SpatialTable metadata accessors
+# ---------------------------------------------------------------------------
+
+# Read a scalar string from zarr_attrs.attributes, returning `default` if absent.
+function _spatialdata_attr(meta::Dict{String,Any}, key::Symbol, default)
+    zarr_attrs = get(meta, "zarr_attrs", nothing)
+    zarr_attrs === nothing && return default
+    haskey(zarr_attrs, :attributes) || return default
+    attrs = zarr_attrs.attributes
+    haskey(attrs, key) || return default
+    val = attrs[key]
+    return val isa AbstractString ? String(val) : val
+end
+
+"""
+    region(tbl::SpatialTable) -> Union{String, Nothing}
+
+Return the name of the spatial element this table annotates — the `region`
+field from the SpatialData NGFF metadata (e.g. `"cell_circles"`).
+Returns `nothing` if the metadata is absent.
+"""
+region(tbl::SpatialTable) = _spatialdata_attr(tbl.metadata, :region, nothing)
+
+"""
+    region_key(tbl::SpatialTable) -> String
+
+Return the `obs` column name that identifies which region each row belongs to.
+Defaults to `"region"` when metadata is absent.
+"""
+region_key(tbl::SpatialTable) = _spatialdata_attr(tbl.metadata, :region_key, "region")
+
+"""
+    instance_key(tbl::SpatialTable) -> String
+
+Return the `obs` column name that links each row to a specific instance in
+the linked region element (e.g. `"cell_id"`).
+Defaults to `"instance_id"` when metadata is absent.
+"""
+instance_key(tbl::SpatialTable) = _spatialdata_attr(tbl.metadata, :instance_key, "instance_id")

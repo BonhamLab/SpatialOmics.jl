@@ -325,6 +325,18 @@ function _read_sd_points(path::String)::SpatialPoints
     # Build N×D Float32 coordinate matrix  (hcat of column vectors → N×D)
     coords = Matrix{Float32}(reduce(hcat, [Float32.(df[!, c]) for c in coord_cols]))
 
+    # Apply the element-level coordinate transform (local → global).
+    # Scale each spatial axis by the corresponding factor; only x/y are scaled
+    # (z scale is 1.0 for the Xenium data and for most spatial transcriptomics).
+    n_coord = length(coord_cols)
+    scales  = _parse_element_scale(meta, n_coord)
+    if any(!=(1.0), scales)
+        for (i, s) in enumerate(scales)
+            s == 1.0 && continue
+            coords[:, i] .*= Float32(s)
+        end
+    end
+
     # Feature columns = everything except coordinates
     feat_df = df[:, setdiff(names(df), coord_cols)]
 
@@ -335,12 +347,61 @@ function _read_sd_points(path::String)::SpatialPoints
     )
 end
 
+# ─── Element-level coordinate transform helper ───────────────────────────────
+#
+# SpatialData stores a scale (or identity) coordinateTransformation in each
+# element's zarr.json attributes.  These map from the element's local coordinate
+# system to a named global coordinate system so that all elements align when
+# displayed together.
+#
+# Returns (sx, sy) scale factors.  Identity / missing transform → (1.0, 1.0).
+# For points the third axis (z) is also returned as sz.
+
+function _parse_element_scale(meta, n_spatial::Int=2)::Vector{Float64}
+    ones_out = ones(Float64, n_spatial)
+    haskey(meta, :attributes) || return ones_out
+    attrs = meta.attributes
+    haskey(attrs, :coordinateTransformations) || return ones_out
+    ct = attrs.coordinateTransformations
+    isempty(ct) && return ones_out
+    t = ct[1]
+    String(t.type) == "scale" || return ones_out
+    raw = Float64.(t.scale)
+    # Return the first n_spatial values.
+    length(raw) >= n_spatial || return ones_out
+    return raw[1:n_spatial]
+end
+
+# Scale a single GeometryBasics geometry by (sx, sy).
+_apply_scale(::Nothing, ::Float64, ::Float64) = nothing
+_apply_scale(g, ::Float64, ::Float64)         = g   # unknown type — pass through
+
+function _apply_scale(g::GeometryBasics.Polygon, sx::Float64, sy::Float64)
+    scale_pt(p) = GeometryBasics.Point2f(Float32(p[1] * sx), Float32(p[2] * sy))
+    ext  = scale_pt.(g.exterior)
+    ints = [scale_pt.(ring) for ring in g.interiors]
+    return GeometryBasics.Polygon(ext, ints)
+end
+
+function _apply_scale(g::GeometryBasics.Circle, sx::Float64, sy::Float64)
+    r_scale = (sx + sy) / 2.0   # uniform when sx ≈ sy; graceful otherwise
+    return GeometryBasics.Circle(
+        GeometryBasics.Point2f(Float32(g.center[1] * sx), Float32(g.center[2] * sy)),
+        Float32(g.r * r_scale),
+    )
+end
+
 # ─── Shapes reader ────────────────────────────────────────────────────────────
 #
-# Shapes are stored as a `shapes.parquet` file containing a `geometry` column
-# (WKB-encoded polygons) plus optional attribute columns.
+# Shapes are stored as a `shapes.parquet` file with a `geometry` WKB column
+# plus optional attribute columns.
 #
-# WKB geometry bytes are decoded inline to GeometryBasics.Polygon2 so that
+# SpatialData uses two geometry conventions:
+#   • Polygon (WKB type 3) — cell boundaries, tissue regions
+#   • Point + radius column  — circles (cell spots, Visium spots, "cell_circles")
+#     The WKB encodes only the centre; the circle is reconstructed as a polygon.
+#
+# WKB geometry bytes are decoded inline to GeometryBasics.Polygon so that
 # SpatialViz can render them directly with poly!.
 #
 # TODO(perf): same eager-parquet issue as points — see note above.
@@ -354,21 +415,35 @@ function _read_sd_shapes(path::String)::SpatialShapes
 
     df = _read_parquet(parquet_path)
 
-    geom_col = "geometry"
+    geom_col   = "geometry"
+    has_radius = "radius" in names(df)
+
     geoms = if geom_col in names(df)
-        Any[_decode_wkb(bytes) for bytes in df[:, geom_col]]
+        if has_radius
+            # Circle format: WKB Point centre + separate radius column
+            Any[_decode_wkb_circle(bytes, r)
+                for (bytes, r) in zip(df[:, geom_col], df.radius)]
+        else
+            Any[_decode_wkb(bytes) for bytes in df[:, geom_col]]
+        end
     else
         Any[]
     end
-    feat_df = df[:, setdiff(names(df), [geom_col])]
 
+    # Apply the element-level coordinate transform (local → global) so that
+    # shapes align with images that carry the same global coordinate system.
+    sx, sy = _parse_element_scale(meta, 2)
+    if sx != 1.0 || sy != 1.0
+        geoms = Any[_apply_scale(g, sx, sy) for g in geoms]
+    end
+
+    feat_df = df[:, setdiff(names(df), [geom_col])]
     return SpatialShapes(geoms, feat_df, Dict{String,Any}("zarr_attrs" => meta))
 end
 
 # ─── WKB decoder ──────────────────────────────────────────────────────────────
 #
-# Minimal inline WKB decoder supporting Polygon (type 3) and MultiPolygon (6).
-# Only little-endian byte order (0x01) is handled; big-endian returns nothing.
+# Supports Polygon (type 3). Only little-endian byte order (0x01) is handled;
 # Z/M flags (0x80000000, 0x40000000) are stripped before type comparison.
 
 function _decode_wkb(bytes::Vector{UInt8})::Union{GeometryBasics.Polygon, Nothing}
@@ -384,10 +459,7 @@ function _decode_wkb(bytes::Vector{UInt8})::Union{GeometryBasics.Polygon, Nothin
     num_rings = Int(ltoh(Base.read(io, UInt32)))
     num_rings == 0 && return nothing
 
-    # Exterior ring
     exterior = _read_wkb_ring(io)
-
-    # Interior rings (holes)
     holes = Vector{Vector{GeometryBasics.Point2f}}()
     for _ in 2:num_rings
         push!(holes, _read_wkb_ring(io))
@@ -395,6 +467,25 @@ function _decode_wkb(bytes::Vector{UInt8})::Union{GeometryBasics.Polygon, Nothin
 
     isempty(exterior) && return nothing
     return GeometryBasics.Polygon(exterior, holes)
+end
+
+# Decode a WKB Point (type 1) centre + radius into a GeometryBasics.Circle.
+function _decode_wkb_circle(
+    bytes  ::Vector{UInt8},
+    radius ::Real,
+)::Union{GeometryBasics.Circle, Nothing}
+    isempty(bytes) && return nothing
+    io = IOBuffer(bytes)
+
+    byte_order = Base.read(io, UInt8)
+    byte_order == 0x01 || return nothing
+
+    geom_type = ltoh(Base.read(io, UInt32)) & 0x0000FFFF
+    geom_type == UInt32(1) || return nothing   # must be Point
+
+    cx = Float32(ltoh(Base.read(io, Float64)))
+    cy = Float32(ltoh(Base.read(io, Float64)))
+    return GeometryBasics.Circle(GeometryBasics.Point2f(cx, cy), Float32(radius))
 end
 
 function _read_wkb_ring(io::IOBuffer)

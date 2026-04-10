@@ -119,9 +119,11 @@ end
 
 Called by `Makie.Resampler` on every zoom/pan event.
 
-`x` and `y` are ranges in the coordinate system reported by `convert_arguments`
-— either pixel coordinates `[1..nx]` / `[1..ny]` (identity transform) or global
-physical coordinates when the image has an affine transform.
+`x` and `y` are **normalised pixel index coordinates** in `[1..nx_norm]` and
+`[1..ny_norm]` respectively (i.e. in the same coordinate system that `size(s)`
+reports).  `Makie.Resampler` always converts data / global coordinates to this
+index space before calling the sampler via `resample_image`.  Code that calls
+the sampler directly (e.g. `_pyramid_image!`) must do the same conversion.
 
 Step size encodes zoom level: large step → coarser level; small step → finer.
 
@@ -131,20 +133,12 @@ data coordinate `(x[i], y[j])`.
 function (s::ImagePyramidSampler)(x::LinRange, y::LinRange)
     finest_nx, finest_ny = size(s)   # normalised (nx_norm, ny_norm)
 
-    # ── Step 1: map global physical coords → normalised pixel [1..finest_N] ──
-    x_pix, y_pix = if s.x_range !== nothing
-        xmin, xmax = s.x_range;  ymin, ymax = s.y_range
-        sx = (finest_nx - 1) / (xmax - xmin)
-        sy = (finest_ny - 1) / (ymax - ymin)
-        LinRange(1.0 + (first(x) - xmin) * sx, 1.0 + (last(x) - xmin) * sx, length(x)),
-        LinRange(1.0 + (first(y) - ymin) * sy, 1.0 + (last(y) - ymin) * sy, length(y))
-    else
-        x, y
-    end
+    # x and y are already normalised pixel indices [1..finest_N].
+    # Makie.Resampler (resample_image) converts data/global coords to index
+    # space before calling us; _pyramid_image! does the same for the image! path.
+    xstep, ystep = step(x), step(y)
 
-    xstep, ystep = step(x_pix), step(y_pix)
-
-    # ── Step 2: select the best pyramid level ─────────────────────────────────
+    # ── Select the best pyramid level ─────────────────────────────────────────
     best_idx  = 1
     best_dist = Inf
     for (i, lvl) in enumerate(s.levels)
@@ -163,16 +157,14 @@ function (s::ImagePyramidSampler)(x::LinRange, y::LinRange)
     nx_norm_k  = s.perm_yx ? ny_k : nx_k
     ny_norm_k  = s.perm_yx ? nx_k : ny_k
 
-    # ── Step 3: normalised pixel → raw level indices ───────────────────────────
-    # ci_norm: normalised column indices [1..nx_norm_k] — represent x_global
-    # ri_norm: normalised row    indices [1..ny_norm_k] — represent y_global
-    ci_norm = _scale_range(x_pix, finest_nx, nx_norm_k)
-    ri_norm = _scale_range(y_pix, finest_ny, ny_norm_k)
+    # ── Normalised pixel → raw level indices ──────────────────────────────────
+    # ci_norm: column indices [1..nx_norm_k] — represent the x dimension
+    # ri_norm: row    indices [1..ny_norm_k] — represent the y dimension
+    ci_norm = _scale_range(x, finest_nx, nx_norm_k)
+    ri_norm = _scale_range(y, finest_ny, ny_norm_k)
 
-    # Map (ci_norm, ri_norm) to raw (ri_raw, ci_raw) in the stored (ny_k, nx_k) level.
-    # perm_yx swaps which normalised axis maps to which raw axis; flip reverses an axis.
+    # Map (ci_norm, ri_norm) to raw (ri_raw, ci_raw) in the (ny_k, nx_k) level.
     ri_raw, ci_raw = if s.perm_yx
-        # x_norm (ci_norm) → raw row;  y_norm (ri_norm) → raw col
         s.flip_dim3 ? (ny_k + 1 .- ci_norm) : ci_norm,
         s.flip_dim2 ? (nx_k + 1 .- ri_norm) : ri_norm
     else
@@ -180,19 +172,15 @@ function (s::ImagePyramidSampler)(x::LinRange, y::LinRange)
         s.flip_dim3 ? (nx_k + 1 .- ci_norm) : ci_norm
     end
 
-    # ── Step 4: read contiguous block from DiskArray (ascending UnitRanges) ───
+    # ── Read contiguous block from DiskArray (ascending UnitRanges) ───────────
     ri_range = minimum(ri_raw):maximum(ri_raw)
     ci_range = minimum(ci_raw):maximum(ci_raw)
     block    = collect(Float32.(level[ri_range, ci_range]))
 
-    # ── Step 5: local indexing + orient for Makie ─────────────────────────────
+    # ── Local indexing + orient for Makie ─────────────────────────────────────
     ri_local = ri_raw .- (first(ri_range) - 1)
     ci_local = ci_raw .- (first(ci_range) - 1)
 
-    # perm_yx=false: ri_raw from y_pix, ci_raw from x_pix
-    #   block[ri_local, ci_local] is (ny_tile, nx_tile) → permutedims → (nx_tile, ny_tile) ✓
-    # perm_yx=true:  ri_raw from x_pix (ci_norm), ci_raw from y_pix (ri_norm)
-    #   block[ri_local, ci_local] is (nx_tile, ny_tile) — already Makie-ready ✓
     return s.perm_yx ? block[ri_local, ci_local] :
                        permutedims(block[ri_local, ci_local])
 end
