@@ -1,6 +1,8 @@
 # SpatialIO/src/spatialdata/to_spatialdata.jl
 # Write a SpatialDataset to a SpatialData-compatible OME-ZARR store.
 
+# TODO: I think this is legacy code that doesn't use julia idioms.
+# These things should be covered by read and write
 using DataFrames
 using SparseArrays
 using Parquet2

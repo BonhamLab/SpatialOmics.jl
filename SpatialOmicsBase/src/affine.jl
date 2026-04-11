@@ -1,6 +1,7 @@
 # SpatialOmics/src/transforms/affine.jl
 # Implementations of transform_coordinates, compose_transformations, and
 # invert_transformation for AffineTransformation.
+# TODO: Shouldn't these use JuliaImages ecosystem?
 
 function transform_coordinates(t::IdentityTransformation, coords::Matrix{<:AbstractFloat})
     return copy(coords)

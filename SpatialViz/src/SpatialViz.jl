@@ -1,3 +1,7 @@
+# TODO: A lot of the content and stubs in this package
+# seem to have been written before discussing use of existing ecosystem
+# and julia antipatterns like spatial_* etc.
+# This might need to be planned from the ground up with current knowledge
 """
     SpatialViz.jl
 

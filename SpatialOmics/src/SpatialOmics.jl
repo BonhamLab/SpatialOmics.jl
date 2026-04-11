@@ -22,6 +22,8 @@ ds2 = SO.read(SO.Zarr(), "/out/experiment.zarr")
 ```
 """
 module SpatialOmics
+# TODO: set compat to julia 1.12 and use the new `public` keyword
+# throughout these packages where appropriate.
 
 # ── Core data structures (exported) ──────────────────────────────────────────
 
@@ -64,12 +66,18 @@ import SpatialOmicsBase:
     SpatialExtent,
     SpatialElementView, SpatialDatasetView,
     extent, intersects, crop,
+    region, region_key, instance_key,
     ImagePyramidSampler
 
 export SpatialExtent,
        SpatialElementView, SpatialDatasetView,
        extent, intersects, crop,
+       region, region_key, instance_key,
        ImagePyramidSampler
+
+# subset conflicts with DataFrames.subset — keep unexported; use SO.subset(roi, key)
+# TODO: We should not be using the verb subset here - what are some alternatives?
+import SpatialOmicsBase: subset
 
 # ── I/O — platform loaders (unexported, use `import SpatialOmics as SO`) ─────
 

@@ -4,6 +4,8 @@
 # Two strategies:
 #   1. Native Zarr.jl (no Python dependency, limited metadata decoding)
 #   2. PythonCall bridge (full SpatialData spec, requires spatialdata Python pkg)
+# TODO: I think this is legacy code that doesn't use julia idioms.
+# These things should be covered by read and write
 
 using DataFrames
 using SparseArrays

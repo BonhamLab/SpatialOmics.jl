@@ -1,6 +1,8 @@
 # SpatialViz/src/colors/palettes.jl
 # Color palette utilities for biological spatial data visualization.
-
+# TODO: I think all of this functionality is already defined
+# in Colors.jl, ColorSchemes.jl, or Makie.jl. 
+# No need to re-impliment
 """
     categorical_palette(n::Int; colorblind_safe::Bool = true) -> Vector
 

@@ -27,6 +27,7 @@
 #   scatter!(ax, roi.points["transcripts"])
 #   poly!(ax, roi.shapes["cell_boundaries"])
 #   heatmap!(ax, roi.images["morphology_focus"]; channel=1)
+#   TODO: Add image!(...) here
 #
 # The view carries the extent so each plot verb can apply it independently;
 # no composite panel helper is required.
@@ -81,6 +82,10 @@ function Base.show(io::IO, ext::SpatialExtent{T}) where T
           "cs=\"$(ext.coordinate_system)\")")
 end
 
+# TODO: Can we define these (in, intersects, extent etc)
+# in terms of GeometryOps or GeometryBasics? 
+# How much could we get for free if we defined these Extents
+# as subtypes of existing geometries?
 """Width of the extent in x."""
 width(ext::SpatialExtent)  = ext.xmax - ext.xmin
 
@@ -150,7 +155,12 @@ end
 # ---------------------------------------------------------------------------
 # crop() — materialise a filtered copy of an element
 # ---------------------------------------------------------------------------
-
+# TODO: Do we actually need this name to be defined?
+# What does the JuliaImages ecosystem do?
+# I think we should use that as inspiration,
+# but if they don't have a concept like this,
+# I think we should use `Base.collect` or `Base.copy` to materialize
+# rather than defining something new
 """
     crop(pts::SpatialPoints, ext::SpatialExtent) -> SpatialPoints
     crop(pts::SpatialPoints, xmin, xmax, ymin, ymax) -> SpatialPoints

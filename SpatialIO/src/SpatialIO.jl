@@ -45,6 +45,9 @@ using SpatialOmicsBase
 #   IO.load_cosmx(path)
 #   IO.read(IO.Zarr(), path)
 #   IO.write(ds, path, IO.NativeH5())
+# TODO: See todo in SpatialOmics.jl about `public` keyword
+# and assess whether any changes are needed here to facilitate that
+
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------

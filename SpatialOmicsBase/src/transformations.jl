@@ -1,5 +1,6 @@
 # SpatialOmics/src/types/transformations.jl
 # Spatial transformations between coordinate systems.
+# TODO: these should probably use JuliaImagesEcosystem
 
 """
     Transformation

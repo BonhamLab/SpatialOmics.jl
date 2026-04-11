@@ -89,6 +89,8 @@ struct TissuePositionsCSV <: StorageFormat end
 
 # ─── read ─────────────────────────────────────────────────────────────────────
 
+# TODO: Let's add convenience methods for read and write
+# that try to guess the type from the file extension.
 """
     read(::Zarr, path::String; use_python::Bool=false) -> SpatialDataset
 
@@ -145,6 +147,13 @@ end
 Read a 10x Genomics cell-feature-barcode HDF5 file.
 """
 function read(::CellFeatureMatrixH5, path::String; lazy::Bool = true)
+    # TODO: there is no need for this pattern,
+    # where read just calls a different named function.
+    # Eg here, the thing that is defined in read_cell_feature_matrix_h5
+    # could just be written here instead. 
+    # This is true throughout this file. 
+    # If it's a matter of file organization, we can have different methods
+    # for the same function name defined in multiple files
     read_cell_feature_matrix_h5(path; lazy)
 end
 
