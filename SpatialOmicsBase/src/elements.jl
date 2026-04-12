@@ -135,25 +135,45 @@ end
 # ---------------------------------------------------------------------------
 
 """
-    SpatialPoints{T<:AbstractFloat}
+    SpatialPoints{T<:AbstractFloat, F}
 
 A set of spatially-located points (e.g. transcript detections, cell centroids).
 
+`F` must satisfy the Tables.jl `istable` trait. Use a `DataFrame` for eager
+in-memory data, or a lazy handle (e.g. `Parquet2.Dataset`) to defer loading
+until the data are actually accessed.
+
 Fields
 ------
-- `coordinates` : Matrix{T} — N×D matrix where N = num points, D = num dimensions
-- `features`    : DataFrame — per-point annotations (gene, cell_id, qv, …)
+- `coordinates` : AbstractMatrix{T} — N×D matrix where N = num points, D = num dimensions
+- `features`    : F — per-point annotations (gene, cell_id, qv, …); Tables.istable
 - `metadata`    : Dict{String,Any}
 """
-struct SpatialPoints{T<:AbstractFloat} <: SpatialElement
-    coordinates::Matrix{T}
-    features::DataFrame
+struct SpatialPoints{T<:AbstractFloat, F} <: SpatialElement
+    coordinates::AbstractMatrix{T}
+    features::F
     metadata::Dict{String,Any}
+
+    function SpatialPoints(coords::AbstractMatrix{<:AbstractFloat}, features, meta::Dict{String,Any})
+        Tables.istable(features) ||
+            throw(ArgumentError("SpatialPoints: features must satisfy Tables.istable"))
+        T = eltype(coords)
+        new{T, typeof(features)}(coords, features, meta)
+    end
 end
+
+# Convenience constructor that infers T from element type
+SpatialPoints(coords, features, meta) =
+    SpatialPoints(coords, features, convert(Dict{String,Any}, meta))
 
 function Base.show(io::IO, pts::SpatialPoints{T}) where T
     n, d = size(pts.coordinates)
-    print(io, "SpatialPoints{$T}($n × $(d)D, features: [", _cols_str(pts.features), "])")
+    cols = Tables.columnnames(pts.features)
+    ncols = length(cols)
+    limit = 4
+    col_str = ncols <= limit ? join(cols, ", ") :
+              join(cols[1:limit-1], ", ") * ", …+$(ncols-(limit-1))"
+    print(io, "SpatialPoints{$T}($n × $(d)D, features: [$col_str])")
 end
 
 # ---------------------------------------------------------------------------

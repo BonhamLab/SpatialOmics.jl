@@ -27,7 +27,6 @@
 #   scatter!(ax, roi.points["transcripts"])
 #   poly!(ax, roi.shapes["cell_boundaries"])
 #   heatmap!(ax, roi.images["morphology_focus"]; channel=1)
-#   TODO: Add image!(...) here
 #
 # The view carries the extent so each plot verb can apply it independently;
 # no composite panel helper is required.
@@ -82,10 +81,6 @@ function Base.show(io::IO, ext::SpatialExtent{T}) where T
           "cs=\"$(ext.coordinate_system)\")")
 end
 
-# TODO: Can we define these (in, intersects, extent etc)
-# in terms of GeometryOps or GeometryBasics? 
-# How much could we get for free if we defined these Extents
-# as subtypes of existing geometries?
 """Width of the extent in x."""
 width(ext::SpatialExtent)  = ext.xmax - ext.xmin
 
@@ -153,42 +148,21 @@ function extent(lbl::SpatialLabels)::SpatialExtent{Float32}
 end
 
 # ---------------------------------------------------------------------------
-# crop() — materialise a filtered copy of an element
+# Spatial crop helpers (internal — not exported)
+# Public API: use collect(view(el, ext)) to materialise a filtered copy.
 # ---------------------------------------------------------------------------
-# TODO: Do we actually need this name to be defined?
-# What does the JuliaImages ecosystem do?
-# I think we should use that as inspiration,
-# but if they don't have a concept like this,
-# I think we should use `Base.collect` or `Base.copy` to materialize
-# rather than defining something new
-"""
-    crop(pts::SpatialPoints, ext::SpatialExtent) -> SpatialPoints
-    crop(pts::SpatialPoints, xmin, xmax, ymin, ymax) -> SpatialPoints
 
-Return a new `SpatialPoints` containing only the points within `ext`.
-"""
-crop(pts::SpatialPoints, xmin::Real, xmax::Real, ymin::Real, ymax::Real,
-     cs::String="global") =
-    crop(pts, SpatialExtent(xmin, xmax, ymin, ymax, cs))
+_crop(pts::SpatialPoints, xmin::Real, xmax::Real, ymin::Real, ymax::Real,
+      cs::String="global") =
+    _crop(pts, SpatialExtent(xmin, xmax, ymin, ymax, cs))
 
-function crop(pts::SpatialPoints{T}, ext::SpatialExtent) where T
+function _crop(pts::SpatialPoints{T}, ext::SpatialExtent) where T
     mask = _points_extent_mask(pts, ext)
-    return SpatialPoints(pts.coordinates[mask, :], pts.features[mask, :], pts.metadata)
+    feats = pts.features isa DataFrame ? pts.features : DataFrame(pts.features)
+    return SpatialPoints(pts.coordinates[mask, :], feats[mask, :], pts.metadata)
 end
 
-"""
-    crop(shp::SpatialShapes, ext::SpatialExtent) -> SpatialShapes
-
-Return shapes whose centroids fall within `ext`.
-
-Filter priority:
-1. `x_centroid`/`y_centroid` feature columns when present (Xenium, CosMx, …).
-2. Centroids computed from the geometry objects via GeometryOps:
-   - `Polygon`: `GeometryOps.centroid`.
-   - `Circle`: the `.center` field directly.
-3. Falls back to returning all shapes if no centroids can be determined.
-"""
-function crop(shp::SpatialShapes, ext::SpatialExtent)
+function _crop(shp::SpatialShapes, ext::SpatialExtent)
     feats = shp.features
     if "x_centroid" in names(feats) && "y_centroid" in names(feats)
         x, y = feats.x_centroid, feats.y_centroid
@@ -258,7 +232,7 @@ end
 # Accessing .features or .coordinates on a SpatialElementView{<:SpatialPoints}
 # returns a spatially-filtered sub-view (SubDataFrame / SubMatrix) rather than
 # the full parent data.  No data is copied; cost is one O(n) mask pass.
-# Call crop(v) to obtain a concrete filtered copy when downstream code requires
+# Call collect(v) to obtain a concrete filtered copy when downstream code requires
 # a plain DataFrame or Matrix.
 # ---------------------------------------------------------------------------
 
@@ -269,12 +243,13 @@ function Base.getproperty(v::SpatialElementView{<:SpatialPoints}, s::Symbol)
         ext  = getfield(v, :extent)
         mask = _points_extent_mask(pts, ext)
         s === :coordinates && return view(pts.coordinates, mask, :)
-        return view(pts.features, mask, :)
+        feats = pts.features isa DataFrame ? pts.features : DataFrame(pts.features)
+        return view(feats, mask, :)
     end
     return getproperty(getfield(v, :parent), s)
 end
 
-# Reusable mask helper (also called from crop).
+# Reusable mask helper.
 function _points_extent_mask(pts::SpatialPoints, ext::SpatialExtent)
     x = pts.coordinates[:, 1]
     y = pts.coordinates[:, 2]
@@ -285,8 +260,8 @@ end
 # extent of a view IS the crop box (not the parent's full extent).
 extent(v::SpatialElementView) = v.extent
 
-# crop materialises a view: apply the stored extent to the parent element.
-crop(v::SpatialElementView) = crop(v.parent, v.extent)
+# collect materialises a view: apply the stored extent to the parent element.
+Base.collect(v::SpatialElementView) = _crop(v.parent, v.extent)
 
 function Base.show(io::IO, v::SpatialElementView{T}) where T
     print(io, "view(", T, ", ", v.extent, ")")
@@ -435,11 +410,11 @@ tables(v::SpatialDatasetView)            = v.tables
 tables(v::SpatialDatasetView, k::String) = v.tables[k]
 
 # ---------------------------------------------------------------------------
-# subset — spatially filter a table to observations within a view's extent
+# filter — spatially filter a table to observations within a view's extent
 # ---------------------------------------------------------------------------
 
 """
-    subset(roi::SpatialDatasetView, tbl_key::String) -> SpatialTable
+    filter(roi::SpatialDatasetView, tbl_key::String) -> SpatialTable
 
 Return a `SpatialTable` containing only the rows whose linked spatial
 instances (cells, spots) fall within `roi.extent`.
@@ -455,13 +430,13 @@ or the linked element is not found.
 
 ```julia
 roi       = view(xen, lims)
-cell_tbl  = subset(roi, "table")        # SpatialTable with cells in ROI
+cell_tbl  = SO.filter(roi, "table")     # SpatialTable with cells in ROI
 cell_ids  = cell_tbl.obs.cell_id        # IDs of those cells
 expr_mat  = cell_tbl.data               # count matrix (ncells × ngenes)
-gene_names = cell_tbl.var.gene_name     # or names(cell_tbl.var)
+gene_names = names(cell_tbl.var)
 ```
 """
-function subset(roi::SpatialDatasetView, tbl_key::String)
+function filter(roi::SpatialDatasetView, tbl_key::String)
     ds  = roi.dataset
     tbl = tables(ds, tbl_key)
 
@@ -473,7 +448,7 @@ function subset(roi::SpatialDatasetView, tbl_key::String)
     # Locate the linked shapes element (labels-linked tables deferred)
     haskey(ds.shapes, rg) || return tbl
 
-    cropped = crop(SpatialElementView(ds.shapes[rg], roi.extent))
+    cropped = collect(SpatialElementView(ds.shapes[rg], roi.extent))
     ids     = Set(cropped.features[!, ik])
 
     mask = tbl.obs[!, ik] .∈ Ref(ids)

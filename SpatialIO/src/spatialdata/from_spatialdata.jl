@@ -4,8 +4,6 @@
 # Two strategies:
 #   1. Native Zarr.jl (no Python dependency, limited metadata decoding)
 #   2. PythonCall bridge (full SpatialData spec, requires spatialdata Python pkg)
-# TODO: I think this is legacy code that doesn't use julia idioms.
-# These things should be covered by read and write
 
 using DataFrames
 using SparseArrays
@@ -279,35 +277,9 @@ end
 #
 # Points are stored as a `points.parquet` file inside the group directory.
 # Coordinate columns are defined in the group's zarr.json `axes` attribute.
-#
-# TODO(perf): this is the dominant load-time bottleneck — a Xenium transcript
-# file is ~350 MB and is fully materialised into a DataFrame here.  The fix is
-# to not force a DataFrame until the user asks for one:
-#
-#   1. In SpatialOmicsBase, make `features` a parametric type `F` and enforce
-#      the Tables.jl Holy-trait in the inner constructor:
-#
-#        struct SpatialPoints{T<:AbstractFloat, F} <: SpatialElement
-#            coordinates::AbstractMatrix{T}
-#            features::F
-#            metadata::Dict{String,Any}
-#            function SpatialPoints(coords, features, meta)
-#                Tables.istable(features) ||
-#                    throw(ArgumentError("features must satisfy Tables.istable"))
-#                new{eltype(coords), typeof(features)}(coords, features, meta)
-#            end
-#        end
-#
-#   2. Pass a lazy handle instead of a materialised DataFrame:
-#      Arrow.Table (mmap=true) gives zero-copy column access and satisfies
-#      Tables.istable.  A thin wrapper around Parquet2.Dataset that reads
-#      row-groups on demand would also work.
-#
-#   3. Widen `coordinates` to `AbstractMatrix{T}` (done in step 1 above) so
-#      we can pass a StructArrays view or DiskArray without copying.
-#
-#   With these changes `from_spatialdata` reads only zarr.json files and
-#   returns in <100 ms; data is pulled when the user first indexes features.
+# Coordinates are read eagerly (small); all other feature columns are kept as
+# a lazy Parquet2.Dataset that is materialised only when the user accesses a
+# spatial view, crop, or writes back to disk.
 
 function _read_sd_points(path::String)::SpatialPoints
     meta = _zread_meta(path)
@@ -316,20 +288,24 @@ function _read_sd_points(path::String)::SpatialPoints
     (isfile(parquet_path) || isdir(parquet_path)) ||
         error("_read_sd_points: missing $parquet_path")
 
-    df = _read_parquet(parquet_path)
+    # Open the parquet file as a lazy dataset (satisfies Tables.istable).
+    # Coordinate columns are read eagerly (small); all other columns stay lazy.
+    lazy_ds = _open_parquet(parquet_path)
 
     # Determine coordinate columns from metadata (default: x, y, z if present)
+    all_cols = String.(Tables.columnnames(lazy_ds))
     axes = haskey(meta, :attributes) && haskey(meta.attributes, :axes) ?
            String.(meta.attributes.axes) : ["x", "y"]
-    coord_cols = [a for a in axes if a in names(df)]
+    coord_cols = [a for a in axes if a in all_cols]
     isempty(coord_cols) && (coord_cols = ["x", "y"])
 
-    # Build N×D Float32 coordinate matrix  (hcat of column vectors → N×D)
-    coords = Matrix{Float32}(reduce(hcat, [Float32.(df[!, c]) for c in coord_cols]))
+    # Eagerly read ONLY coordinate columns to build the N×D Float32 matrix.
+    coord_df = DataFrame(Parquet2.Dataset(parquet_path; readercolumns = Symbol.(coord_cols)))
+
+    # Build N×D Float32 coordinate matrix (hcat of column vectors → N×D)
+    coords = Matrix{Float32}(reduce(hcat, [Float32.(coord_df[!, c]) for c in coord_cols]))
 
     # Apply the element-level coordinate transform (local → global).
-    # Scale each spatial axis by the corresponding factor; only x/y are scaled
-    # (z scale is 1.0 for the Xenium data and for most spatial transcriptomics).
     n_coord = length(coord_cols)
     scales  = _parse_element_scale(meta, n_coord)
     if any(!=(1.0), scales)
@@ -339,12 +315,11 @@ function _read_sd_points(path::String)::SpatialPoints
         end
     end
 
-    # Feature columns = everything except coordinates
-    feat_df = df[:, setdiff(names(df), coord_cols)]
-
+    # Store the full lazy dataset as features. Materialise to DataFrame only
+    # when the user accesses a spatial view/crop or writes back to disk.
     return SpatialPoints(
         coords,
-        feat_df,
+        lazy_ds,
         Dict{String,Any}("zarr_attrs" => meta, "coord_cols" => coord_cols),
     )
 end
@@ -405,8 +380,6 @@ end
 #
 # WKB geometry bytes are decoded inline to GeometryBasics.Polygon so that
 # SpatialViz can render them directly with poly!.
-#
-# TODO(perf): same eager-parquet issue as points — see note above.
 
 function _read_sd_shapes(path::String)::SpatialShapes
     meta = _zread_meta(path)
@@ -611,6 +584,24 @@ function _read_csr_matrix(path::String)::SparseMatrixCSC
 end
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
+"""
+Open a parquet file/directory as a lazy `Parquet2.Dataset` (satisfies `Tables.istable`).
+For partitioned directories, returns the first part's dataset for column-name discovery
+and lazy reads; full materialisation via `_read_parquet` is used when all rows are needed.
+"""
+function _open_parquet(path::String)::Parquet2.Dataset
+    if isfile(path)
+        return Parquet2.Dataset(path)
+    elseif isdir(path)
+        parts = sort(filter(f -> endswith(f, ".parquet"), readdir(path, join=true)))
+        isempty(parts) && error("_open_parquet: no .parquet files in $path")
+        # Return the first part; partitioned read happens in _read_parquet.
+        return Parquet2.Dataset(parts[1])
+    else
+        error("_open_parquet: path not found: $path")
+    end
+end
 
 """
 Read a parquet dataset from `path`.  Handles both single `.parquet` files

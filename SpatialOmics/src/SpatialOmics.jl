@@ -22,8 +22,6 @@ ds2 = SO.read(SO.Zarr(), "/out/experiment.zarr")
 ```
 """
 module SpatialOmics
-# TODO: set compat to julia 1.12 and use the new `public` keyword
-# throughout these packages where appropriate.
 
 # ── Core data structures (exported) ──────────────────────────────────────────
 
@@ -41,13 +39,11 @@ export SpatialDataset,
 import SpatialOmicsBase:
     spatial_dataset,
     images, labels, points, shapes, tables, metadata,
-    channels, channels!,
-    get_metadata, set_metadata!
+    channels, channels!
 
 export spatial_dataset,
        images, labels, points, shapes, tables, metadata,
-       channels, channels!,
-       get_metadata, set_metadata!
+       channels, channels!
 
 # ── Coordinate systems and transformations (exported) ─────────────────────────
 
@@ -65,37 +61,45 @@ export CoordinateSystem, Transformation,
 import SpatialOmicsBase:
     SpatialExtent,
     SpatialElementView, SpatialDatasetView,
-    extent, intersects, crop,
+    extent, intersects,
     region, region_key, instance_key,
     ImagePyramidSampler
 
 export SpatialExtent,
        SpatialElementView, SpatialDatasetView,
-       extent, intersects, crop,
+       extent, intersects,
        region, region_key, instance_key,
        ImagePyramidSampler
 
-# subset conflicts with DataFrames.subset — keep unexported; use SO.subset(roi, key)
-# TODO: We should not be using the verb subset here - what are some alternatives?
-import SpatialOmicsBase: subset
+# ── Tier 2 — spatial operations (unexported/public) ──────────────────────────
+# Use qualified: SO.filter(roi, key)
+import SpatialOmicsBase: filter
+public filter
 
-# ── I/O — platform loaders (unexported, use `import SpatialOmics as SO`) ─────
-
+# ── Tier 2 — I/O platform loaders (unexported/public) ────────────────────────
 import SpatialIO:
     PlatformReader,
     XeniumReader, VisiumReader, CosMxReader, MerfishReader,
     validate_path, read_data, load_spatial_data,
     load_xenium, load_visium, load_cosmx, load_merfish
 
-# ── I/O — format type tokens (unexported) ────────────────────────────────────
+public PlatformReader
+public XeniumReader, VisiumReader, CosMxReader, MerfishReader
+public validate_path, read_data, load_spatial_data
+public load_xenium, load_visium, load_cosmx, load_merfish
 
+# ── Tier 2 — I/O format tokens (unexported/public) ───────────────────────────
 import SpatialIO:
     StorageFormat,
     Zarr, NativeH5, AnnData, GeoJSON,
     TranscriptsParquet, CellsParquet, CellFeatureMatrixH5, TissuePositionsCSV
 
-# ── I/O — read / write (unexported) ──────────────────────────────────────────
+public StorageFormat
+public Zarr, NativeH5, AnnData, GeoJSON
+public TranscriptsParquet, CellsParquet, CellFeatureMatrixH5, TissuePositionsCSV
 
+# ── Tier 2 — I/O read/write (unexported/public) ──────────────────────────────
 import SpatialIO: read, write
+public read, write
 
 end # module SpatialOmics

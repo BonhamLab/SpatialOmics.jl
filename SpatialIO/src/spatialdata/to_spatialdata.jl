@@ -1,8 +1,5 @@
 # SpatialIO/src/spatialdata/to_spatialdata.jl
 # Write a SpatialDataset to a SpatialData-compatible OME-ZARR store.
-
-# TODO: I think this is legacy code that doesn't use julia idioms.
-# These things should be covered by read and write
 using DataFrames
 using SparseArrays
 using Parquet2
@@ -133,10 +130,10 @@ function _write_sd_points(path::String, pts::SpatialPoints)
     D = size(pts.coordinates, 2)
     coord_cols = coord_cols[1:min(length(coord_cols), D)]
 
-    # Build DataFrame: coordinates + features
+    # Build DataFrame: coordinates + features (features may be a lazy table)
     df = DataFrame(pts.coordinates, coord_cols)
-    for col in names(pts.features)
-        df[!, col] = pts.features[!, col]
+    for col in Tables.columnnames(pts.features)
+        df[!, String(col)] = Tables.getcolumn(pts.features, col)
     end
 
     Parquet2.writefile(joinpath(path, "points.parquet"), df)

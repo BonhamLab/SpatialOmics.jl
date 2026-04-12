@@ -1,6 +1,6 @@
-# SpatialOmics/src/types/transformations.jl
-# Spatial transformations between coordinate systems.
-# TODO: these should probably use JuliaImagesEcosystem
+# SpatialOmicsBase/src/transformations.jl
+# Spatial transformation types. Implementations live in affine.jl,
+# which delegates to CoordinateTransformations.jl.
 
 """
     Transformation

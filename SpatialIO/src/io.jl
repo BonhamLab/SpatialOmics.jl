@@ -89,8 +89,26 @@ struct TissuePositionsCSV <: StorageFormat end
 
 # ─── read ─────────────────────────────────────────────────────────────────────
 
-# TODO: Let's add convenience methods for read and write
-# that try to guess the type from the file extension.
+"""
+    read(path::String; kwargs...) -> SpatialDataset
+
+Read a spatial dataset from `path`, guessing the format from the file extension
+or directory structure:
+- `.zarr` / directory containing `zarr.json` → `Zarr()`
+- `.h5` / `.hdf5`                            → `NativeH5()`
+
+Keyword arguments are forwarded to the selected format's `read` method.
+"""
+function read(path::String; kwargs...)
+    if endswith(path, ".zarr") || isdir(path) && isfile(joinpath(path, "zarr.json"))
+        return read(Zarr(), path; kwargs...)
+    elseif endswith(path, ".h5") || endswith(path, ".hdf5")
+        return read(NativeH5(), path; kwargs...)
+    else
+        error("read: cannot guess format for \"$path\". Pass an explicit format token, e.g. read(Zarr(), path).")
+    end
+end
+
 """
     read(::Zarr, path::String; use_python::Bool=false) -> SpatialDataset
 
@@ -121,50 +139,10 @@ function read(::NativeH5, path::String)::SpatialDataset
     read_hdf5(path)
 end
 
-"""
-    read(::TranscriptsParquet, path::String; columns=nothing) -> DataFrame
-
-Read a Xenium / MERFISH per-transcript Parquet file.
-Pass `columns` to restrict which columns are loaded.
-"""
-function read(::TranscriptsParquet, path::String; columns = nothing)::DataFrame
-    read_transcripts_parquet(path; columns)
-end
-
-"""
-    read(::CellsParquet, path::String) -> DataFrame
-
-Read a Xenium cells-summary Parquet file into a DataFrame.
-"""
-function read(::CellsParquet, path::String)::DataFrame
-    read_cells_parquet(path)
-end
-
-"""
-    read(::CellFeatureMatrixH5, path::String; lazy::Bool=true)
-        -> (matrix::AbstractMatrix, barcodes::Vector{String}, features::DataFrame)
-
-Read a 10x Genomics cell-feature-barcode HDF5 file.
-"""
-function read(::CellFeatureMatrixH5, path::String; lazy::Bool = true)
-    # TODO: there is no need for this pattern,
-    # where read just calls a different named function.
-    # Eg here, the thing that is defined in read_cell_feature_matrix_h5
-    # could just be written here instead. 
-    # This is true throughout this file. 
-    # If it's a matter of file organization, we can have different methods
-    # for the same function name defined in multiple files
-    read_cell_feature_matrix_h5(path; lazy)
-end
-
-"""
-    read(::TissuePositionsCSV, path::String) -> DataFrame
-
-Parse a Visium `tissue_positions.csv` (or `.csv.gz`) file.
-"""
-function read(::TissuePositionsCSV, path::String)::DataFrame
-    read_tissue_positions_csv(path)
-end
+# Format-specific read methods are defined in their respective format files:
+#   formats/parquet.jl  — TranscriptsParquet, CellsParquet
+#   formats/hdf5.jl     — CellFeatureMatrixH5
+#   formats/csv.jl      — TissuePositionsCSV
 
 # ─── write ────────────────────────────────────────────────────────────────────
 
@@ -198,20 +176,6 @@ function write(ds::SpatialDataset, path::String, ::NativeH5)
     write_hdf5(ds, path)
 end
 
-"""
-    write(ds::SpatialDataset, path::String, ::AnnData; table_key::String="table")
-
-Export the named `SpatialTable` from `ds` as an AnnData `.h5ad` file.
-"""
-function write(ds::SpatialDataset, path::String, ::AnnData; table_key::String = "table")
-    write_anndata(ds, path; table_key)
-end
-
-"""
-    write(shapes::SpatialShapes, path::String, ::GeoJSON)
-
-Write `shapes` to a GeoJSON FeatureCollection file.
-"""
-function write(shapes::SpatialShapes, path::String, ::GeoJSON)
-    write_geojson(shapes, path)
-end
+# Format-specific write methods are defined in their respective format files:
+#   formats/anndata.jl  — AnnData
+#   formats/geojson.jl  — GeoJSON

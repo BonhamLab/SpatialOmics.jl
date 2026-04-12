@@ -10,4 +10,4 @@ SpatialOmicsBase = "fc95849c-1493-4666-a0c4-8e4886e585c0"
 
 [compat]
 Documenter = "1.17.0"
-julia = "1.9"
+julia = "1.12"

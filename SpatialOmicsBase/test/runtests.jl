@@ -28,7 +28,7 @@ using DataFrames
     @testset "SpatialPoints" begin
         coords = rand(Float32, 50, 2)
         feats = DataFrame(gene = fill("GAPDH", 50), cell_id = 1:50)
-        pts = SpatialPoints{Float32}(coords, feats, Dict{String,Any}())
+        pts = SpatialPoints(coords, feats, Dict{String,Any}())
         @test pts isa SpatialElement
         @test size(pts.coordinates) == (50, 2)
         @test nrow(pts.features) == 50
@@ -38,7 +38,7 @@ using DataFrames
         ds = spatial_dataset()
         coords = rand(Float32, 10, 2)
         feats = DataFrame(gene = fill("ACTB", 10))
-        pts = SpatialPoints{Float32}(coords, feats, Dict{String,Any}())
+        pts = SpatialPoints(coords, feats, Dict{String,Any}())
         ds["transcripts"] = pts
         @test haskey(ds.points, "transcripts")
         @test points(ds, "transcripts") === pts
@@ -71,8 +71,8 @@ using DataFrames
 
     @testset "Metadata helpers" begin
         ds = spatial_dataset()
-        set_metadata!(ds, "platform", "xenium")
-        @test get_metadata(ds)["platform"] == "xenium"
+        ds.metadata["platform"] = "xenium"
+        @test SpatialOmicsBase.metadata(ds)["platform"] == "xenium"
     end
 
 end

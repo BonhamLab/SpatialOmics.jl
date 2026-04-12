@@ -41,8 +41,6 @@ sampler = ImagePyramidSampler(img, 2)    # channel 2
 struct ImagePyramidSampler{T} <: AbstractMatrix{T}
     # Stored (ny, nx): levels[1] is finest, levels[end] is coarsest.
     # Vector{Any} to accommodate heterogeneous DiskArray concrete types.
-    # TODO: Profile this to see if it is slow. 
-    # Figure out if it makes sense to define the types a bit more narrowly
     levels::Vector{Any}
     # Global spatial extents (in physical / global-coordinate-system units).
     # Nothing → use pixel coordinates 1..nx / 1..ny (identity transform).
@@ -70,8 +68,6 @@ transform is present), the sampler will render in the global coordinate system
 so that overlaid images align correctly.
 """
 function ImagePyramidSampler(img::SpatialImage{T}, channel::Int=1) where T
-    # TODO: For OME-Zarr channels, should we use DimensionalData?
-    # Does this functionality exist already with Zarr.jl, PyramidScheme.jl, etc?
     _slice(arr) = ndims(arr) == 3 ? view(arr, channel, :, :) :   # (ny, nx) view
                   ndims(arr) == 2 ? arr :
                   error("ImagePyramidSampler: expected 2-D or 3-D array, got $(ndims(arr))-D")

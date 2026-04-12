@@ -11,8 +11,6 @@ points
 shapes
 tables
 metadata
-get_metadata
-set_metadata!
 ```
 
 ## Elements

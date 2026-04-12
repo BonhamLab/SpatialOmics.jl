@@ -34,6 +34,7 @@ using CodecZstd
 using DiskArrays
 using SparseArrays
 using DataFrames
+using Tables
 using TiffImages
 using SpatialOmicsBase
 
@@ -41,12 +42,22 @@ using SpatialOmicsBase
 # Nothing is exported from SpatialIO.
 #
 # All public names are surfaced through the SpatialOmics umbrella:
-#   import SpatialOmics as IO
-#   IO.load_cosmx(path)
-#   IO.read(IO.Zarr(), path)
-#   IO.write(ds, path, IO.NativeH5())
-# TODO: See todo in SpatialOmics.jl about `public` keyword
-# and assess whether any changes are needed here to facilitate that
+#   import SpatialOmics as SO
+#   SO.load_cosmx(path)
+#   SO.read(SO.Zarr(), path)
+#   SO.write(ds, path, SO.NativeH5())
+#
+# The `public` declarations below document the intended Tier-2 API without
+# auto-importing names on `using SpatialIO`.
+# ---------------------------------------------------------------------------
+
+public read, write
+public StorageFormat, Zarr, NativeH5, AnnData, GeoJSON
+public TranscriptsParquet, CellsParquet, CellFeatureMatrixH5, TissuePositionsCSV
+public PlatformReader
+public XeniumReader, VisiumReader, CosMxReader, MerfishReader
+public validate_path, read_data, load_spatial_data
+public load_xenium, load_visium, load_cosmx, load_merfish
 
 # ---------------------------------------------------------------------------
 
@@ -54,6 +65,7 @@ using SpatialOmicsBase
 # Includes
 # ---------------------------------------------------------------------------
 
+include("io.jl")
 include("readers/platform_reader.jl")
 include("readers/xenium.jl")
 include("readers/visium.jl")
@@ -69,6 +81,5 @@ include("formats/anndata.jl")
 include("formats/geojson.jl")
 include("hdf5_backend.jl")
 include("zarr_backend.jl")
-include("io.jl")
 
 end # module SpatialIO
