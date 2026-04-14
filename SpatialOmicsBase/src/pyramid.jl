@@ -40,7 +40,11 @@ sampler = ImagePyramidSampler(img, 2)    # channel 2
 """
 struct ImagePyramidSampler{T} <: AbstractMatrix{T}
     # Stored (ny, nx): levels[1] is finest, levels[end] is coarsest.
-    # Vector{Any} to accommodate heterogeneous DiskArray concrete types.
+    # Vector{Any} is intentional — pyramid levels are heterogeneous DiskArray
+    # concrete types (ZarrV3Array, SubArray views, etc.) that share no common
+    # supertype. DimensionalData and PyramidScheme.jl were evaluated and found
+    # unsuitable: neither provides the Makie.Resampler callable interface with
+    # coordinate normalisation needed here.
     levels::Vector{Any}
     # Global spatial extents (in physical / global-coordinate-system units).
     # Nothing → use pixel coordinates 1..nx / 1..ny (identity transform).
@@ -68,6 +72,8 @@ transform is present), the sampler will render in the global coordinate system
 so that overlaid images align correctly.
 """
 function ImagePyramidSampler(img::SpatialImage{T}, channel::Int=1) where T
+    # Channel slicing uses plain view() rather than DimensionalData — Zarr.jl
+    # and PyramidScheme.jl provide no multiscale NGFF abstraction at this level.
     _slice(arr) = ndims(arr) == 3 ? view(arr, channel, :, :) :   # (ny, nx) view
                   ndims(arr) == 2 ? arr :
                   error("ImagePyramidSampler: expected 2-D or 3-D array, got $(ndims(arr))-D")

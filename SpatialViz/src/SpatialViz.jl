@@ -32,14 +32,16 @@ OME-Zarr stores) are wrapped in `ImagePyramidSampler` and passed to
 `Makie.Resampler`, giving zoom-responsive lazy tile loading at no extra cost.
 
 ## Coordinate-based selection
-`SpatialExtent` and `SpatialView` (from SpatialOmicsBase) can be used to crop
-elements before plotting — see the `crop` function.
+`SpatialExtent` and `SpatialElementView` (from SpatialOmicsBase) can be used to
+select elements before plotting. Use `view(el, extent)` for a lazy view;
+`collect(v)` materialises the filtered element.
 """
 module SpatialViz
 
 using Makie
 using GeometryBasics
 using SpatialOmicsBase
+using SpatialOmicsBase: intersects   # explicit import avoids silent re-export failure
 using ImageCore: colorview, RGB
 using MappedArrays: mappedarray
 
@@ -47,7 +49,7 @@ using MappedArrays: mappedarray
 # Re-export key types users will need
 # ---------------------------------------------------------------------------
 export SpatialExtent, SpatialElementView, SpatialDatasetView
-export extent, intersects, crop
+export extent, intersects
 export ImagePyramidSampler
 
 # ---------------------------------------------------------------------------

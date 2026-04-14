@@ -164,7 +164,8 @@ end
 
 function _crop(shp::SpatialShapes, ext::SpatialExtent)
     feats = shp.features
-    if "x_centroid" in names(feats) && "y_centroid" in names(feats)
+    has_feats = ncol(feats) > 0 && nrow(feats) == length(shp.geometries)
+    if has_feats && "x_centroid" in names(feats) && "y_centroid" in names(feats)
         x, y = feats.x_centroid, feats.y_centroid
         mask = (x .>= ext.xmin) .& (x .<= ext.xmax) .&
                (y .>= ext.ymin) .& (y .<= ext.ymax)
@@ -186,7 +187,8 @@ function _crop(shp::SpatialShapes, ext::SpatialExtent)
         end
     end
     any_geom || return shp
-    return SpatialShapes(geoms[mask], feats[mask, :], shp.metadata)
+    sub_feats = has_feats ? feats[mask, :] : feats
+    return SpatialShapes(geoms[mask], sub_feats, shp.metadata)
 end
 
 _geom_centroid(::Nothing)                   = nothing

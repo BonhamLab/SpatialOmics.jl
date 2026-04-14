@@ -12,9 +12,9 @@
 
 const _SpatialGeom = Union{GeometryBasics.Polygon, GeometryBasics.Circle}
 
-# View dispatch — crop is applied lazily at render time.
+# View dispatch — materialise the view at render time.
 function Makie.convert_arguments(P::Type{<:Poly}, v::SpatialElementView{<:SpatialShapes})
-    return Makie.convert_arguments(P, crop(v.parent, v.extent))
+    return Makie.convert_arguments(P, collect(v))
 end
 
 """
