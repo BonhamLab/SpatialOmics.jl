@@ -30,16 +30,30 @@ Default implementation returns `true`; override for stricter validation.
 validate_path(::PlatformReader, ::String) = true
 
 """
+    load(reader::PlatformReader, path::String; validate::Bool=true) -> SpatialDataset
+
+Load a `SpatialDataset` from `path` using the given reader instance. Reader
+configuration is set at construction time via keyword arguments:
+
+```julia
+import SpatialIO as SIO
+ds = SIO.load(SIO.CosMxReader(),                      "/data/my_experiment")
+ds = SIO.load(SIO.CosMxReader(; morphology_dir=dir),  "/data/my_experiment")
+```
+"""
+function load(reader::PlatformReader, path::String; validate::Bool = true)
+    if validate && !validate_path(reader, path)
+        error("Path does not look like valid $(typeof(reader)) output: $path")
+    end
+    return read_data(reader, path)
+end
+
+"""
     load_spatial_data(path::String, platform::Type{<:PlatformReader}; kwargs...)
         -> SpatialDataset
 
-Universal dispatcher: construct a reader of type `platform`, optionally
-validate `path`, then call `read_data`.
-
-# Example
-```julia
-ds = load_spatial_data("/data/xenium_run", XeniumReader)
-```
+Internal dispatcher: construct a reader of type `platform`, optionally
+validate `path`, then call `read_data`. Prefer `load(reader, path)` for new code.
 """
 function load_spatial_data(
     path::String,

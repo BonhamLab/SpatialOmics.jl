@@ -1,5 +1,0 @@
-# SpatialAnalysis.jl
-
-SpatialAnalysis.jl is the analysis core of the SpatialOmics.jl monorepo, organised into four functional sub-modules: `QualityControl` (spot/cell filtering, artifact detection, spatially-aware QC metrics), `Preprocessing` (count normalisation, batch-effect correction, missing-value imputation), `SpatialStatistics` (Moran's I autocorrelation, hotspot detection, spatially-constrained clustering), and `CellInteraction` (ligand-receptor screening, neighbourhood profiling, communication scoring). All public functions are pure where possible, enabling transparent parallelisation via ThreadsX.jl for shared-memory workloads; they accept and return `SpatialDataset` objects from SpatialOmicsBase.jl, making them composable in analysis pipelines.
-
-**Status: stub — deferred to Phase 2.**

@@ -128,11 +128,107 @@ end
 Return the pixel-coordinate bounding box of the image (1-based, last two dims
 are y × x following the OME-Zarr c,y,x convention).
 """
-function extent(img::SpatialImage{T})::SpatialExtent{T} where T
+function extent(img::SpatialImage)::SpatialExtent{Float32}
     sz = size(img.data)
     ny, nx = sz[end-1], sz[end]
     cs = get(img.metadata, "coordinate_system", "global")
-    return SpatialExtent{T}(T(1), T(nx), T(1), T(ny), cs)
+    if haskey(img.metadata, "x_range") && haskey(img.metadata, "y_range")
+        xr = img.metadata["x_range"]
+        yr = img.metadata["y_range"]
+        return SpatialExtent{Float32}(Float32(xr[1]), Float32(xr[2]),
+                                      Float32(yr[1]), Float32(yr[2]), cs)
+    end
+    return SpatialExtent{Float32}(1f0, Float32(nx), 1f0, Float32(ny), cs)
+end
+
+"""
+    extent(shp::SpatialShapes, i::Int) -> SpatialExtent{Float64}
+
+Return the bounding box of geometry `i` in `shp`.
+
+Fast path: if the features DataFrame contains `xmin`, `xmax`, `ymin`, `ymax`
+columns (as written by `CosMxReader` for FOV shapes), they are used directly.
+Otherwise the geometry object is decoded — supports `GeometryBasics.Polygon`,
+`GeometryBasics.Circle`, and raw WKB bytes (as stored after a zarr round-trip).
+
+```julia
+# Get the extent of FOV 3 and crop the dataset to it
+i = findfirst(==(3), ds.shapes["fovs"].features.fov_id)
+view(ds, extent(ds.shapes["fovs"], i))
+
+# User-defined ROIs work identically
+view(ds, extent(ds.shapes["rois"], 2))
+```
+"""
+function extent(shp::SpatialShapes, i::Int)::SpatialExtent{Float64}
+    cs = get(shp.metadata, "coordinate_system", "global")
+    # Fast path: pre-computed bbox columns
+    feats = shp.features
+    if nrow(feats) >= i &&
+       all(c -> c in names(feats), ("xmin", "xmax", "ymin", "ymax"))
+        return SpatialExtent(Float64(feats[i, :xmin]), Float64(feats[i, :xmax]),
+                             Float64(feats[i, :ymin]), Float64(feats[i, :ymax]), cs)
+    end
+    return _geom_extent(shp.geometries[i], cs)
+end
+
+# Geometry → SpatialExtent dispatch
+_geom_extent(::Nothing, cs) = error("extent: geometry at index is nothing")
+
+function _geom_extent(g::GeometryBasics.Polygon, cs)
+    pts = GeometryBasics.coordinates(g)
+    SpatialExtent(Float64(minimum(p[1] for p in pts)),
+                  Float64(maximum(p[1] for p in pts)),
+                  Float64(minimum(p[2] for p in pts)),
+                  Float64(maximum(p[2] for p in pts)), cs)
+end
+
+function _geom_extent(g::GeometryBasics.Circle, cs)
+    cx, cy, r = Float64(g.center[1]), Float64(g.center[2]), Float64(g.r)
+    SpatialExtent(cx - r, cx + r, cy - r, cy + r, cs)
+end
+
+# WKB bytes — scan x,y pairs to find bbox without full decode.
+# Layout: 1(byte-order) + 4(type) + 4(nrings) then per ring: 4(npts) + npts×16(xy)
+function _geom_extent(bytes::Vector{UInt8}, cs)
+    length(bytes) < 14 && error("extent: WKB bytes too short ($(length(bytes)))")
+    io = IOBuffer(bytes)
+    skip(io, 5)   # byte-order mark + type
+    n_rings = Int(ltoh(Base.read(io, UInt32)))
+    n_rings == 0 && error("extent: WKB polygon has 0 rings")
+    xmin, xmax, ymin, ymax = Inf, -Inf, Inf, -Inf
+    for _ in 1:n_rings
+        n_pts = Int(ltoh(Base.read(io, UInt32)))
+        for _ in 1:n_pts
+            x = Float64(ltoh(Base.read(io, Float64)))
+            y = Float64(ltoh(Base.read(io, Float64)))
+            x < xmin && (xmin = x);  x > xmax && (xmax = x)
+            y < ymin && (ymin = y);  y > ymax && (ymax = y)
+        end
+    end
+    SpatialExtent(xmin, xmax, ymin, ymax, cs)
+end
+
+_geom_extent(g, cs) = error("extent: unsupported geometry type $(typeof(g))")
+
+"""
+    extent(shp::SpatialShapes) -> SpatialExtent{Float64}
+
+Return the bounding box of all geometries in `shp`.
+"""
+function extent(shp::SpatialShapes)::SpatialExtent{Float64}
+    isempty(shp.geometries) && error("extent: SpatialShapes is empty")
+    cs = get(shp.metadata, "coordinate_system", "global")
+    # Fast path: bbox columns present
+    feats = shp.features
+    if nrow(feats) == length(shp.geometries) &&
+       all(c -> c in names(feats), ("xmin", "xmax", "ymin", "ymax"))
+        return SpatialExtent(Float64(minimum(feats.xmin)), Float64(maximum(feats.xmax)),
+                             Float64(minimum(feats.ymin)), Float64(maximum(feats.ymax)), cs)
+    end
+    exts = [_geom_extent(g, cs) for g in shp.geometries]
+    SpatialExtent(minimum(e.xmin for e in exts), maximum(e.xmax for e in exts),
+                  minimum(e.ymin for e in exts), maximum(e.ymax for e in exts), cs)
 end
 
 """
@@ -148,9 +244,26 @@ function extent(lbl::SpatialLabels)::SpatialExtent{Float32}
 end
 
 # ---------------------------------------------------------------------------
-# Spatial crop helpers (internal — not exported)
-# Public API: use collect(view(el, ext)) to materialise a filtered copy.
+# Spatial crop — public materialisation API
 # ---------------------------------------------------------------------------
+
+"""
+    crop(el::SpatialPoints, xmin, xmax, ymin, ymax) -> SpatialPoints
+    crop(el::SpatialShapes, xmin, xmax, ymin, ymax) -> SpatialShapes
+    crop(el, ext::SpatialExtent) -> same type as el
+
+Materialise a filtered copy of `el` containing only the elements within the
+bounding box. Unlike `view`, `crop` allocates a new concrete object. Use
+`view` for lazy rendering; use `crop` when you need a standalone filtered copy.
+"""
+function crop(el::SpatialElement, xmin::Real, xmax::Real, ymin::Real, ymax::Real,
+              cs::String="global")
+    _crop(el, SpatialExtent(xmin, xmax, ymin, ymax, cs))
+end
+
+function crop(el::SpatialElement, ext::SpatialExtent)
+    _crop(el, ext)
+end
 
 _crop(pts::SpatialPoints, xmin::Real, xmax::Real, ymin::Real, ymax::Real,
       cs::String="global") =

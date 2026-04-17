@@ -139,6 +139,35 @@ function _write_sd_points(path::String, pts::SpatialPoints)
     Parquet2.writefile(joinpath(path, "points.parquet"), df)
 end
 
+# ─── WKB polygon encoder ─────────────────────────────────────────────────────
+
+"""
+    _encode_wkb_polygon(geom::GeometryBasics.Polygon) -> Vector{UInt8}
+
+Encode a polygon as little-endian WKB. Format:
+  1 byte  byte order mark (0x01 = little-endian)
+  4 bytes geometry type   (0x03000000 = Polygon)
+  4 bytes ring count      (1 for exterior-only polygons)
+  For each ring:
+    4 bytes   point count
+    n×16 bytes  Float64 x, y pairs
+
+Matches the format decoded by `_decode_wkb` in `from_spatialdata.jl`.
+"""
+function _encode_wkb_polygon(geom::GeometryBasics.Polygon)
+    io = IOBuffer()
+    Base.write(io, UInt8(0x01))         # little-endian
+    Base.write(io, UInt32(3))           # WKB type: polygon
+    ring = GeometryBasics.coordinates(geom)
+    Base.write(io, UInt32(1))           # one ring (exterior only)
+    Base.write(io, UInt32(length(ring)))
+    for pt in ring
+        Base.write(io, Float64(pt[1]))
+        Base.write(io, Float64(pt[2]))
+    end
+    return take!(io)
+end
+
 # ─── Shapes writer ────────────────────────────────────────────────────────────
 
 function _write_sd_shapes(path::String, shp::SpatialShapes)
@@ -151,8 +180,10 @@ function _write_sd_shapes(path::String, shp::SpatialShapes)
         first_geom = shp.geometries[1]
         if first_geom isa AbstractVector{UInt8}
             df[!, "geometry"] = [Vector{UInt8}(g) for g in shp.geometries]
+        elseif first_geom isa GeometryBasics.Polygon
+            df[!, "geometry"] = [_encode_wkb_polygon(g) for g in shp.geometries]
         else
-            @warn "_write_sd_shapes: geometries are $(typeof(first_geom)), not WKB bytes — writing features only. Convert to WKB before calling to_spatialdata for full spec compliance."
+            @warn "_write_sd_shapes: geometries are $(typeof(first_geom)), not WKB bytes or Polygon — writing features only. Convert to WKB before calling to_spatialdata for full spec compliance."
         end
     end
 
@@ -198,11 +229,25 @@ function _write_anndata_dataframe(path::String, df::DataFrame)
     for col in cols
         col_path = joinpath(path, col)
         vals = df[!, col]
+
+        # Strip Union{Missing, T} → T by replacing missing with a sentinel value.
+        if Missing <: eltype(vals)
+            T_base = nonmissingtype(eltype(vals))
+            if T_base <: AbstractFloat
+                vals = coalesce.(vals, T_base(NaN))
+            elseif T_base <: Integer
+                vals = coalesce.(vals, zero(T_base))
+            elseif T_base <: AbstractString || T_base == String
+                vals = coalesce.(vals, "")
+            else
+                vals = coalesce.(vals, zero(T_base))
+            end
+        end
+
         if eltype(vals) <: AbstractString || eltype(vals) == String
             _zwrite_string_array(col_path, Vector{String}(vals))
             _write_string_array_meta(col_path)
         else
-            T = eltype(vals)
             _zwrite_array(col_path, collect(vals);
                           chunk_shape = (length(vals),))
         end

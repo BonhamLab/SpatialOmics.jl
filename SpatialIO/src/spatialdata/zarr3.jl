@@ -31,6 +31,7 @@ end
 # ─── dtype ────────────────────────────────────────────────────────────────────
 
 function _zdtype_to_julia(dt::String)
+    dt == "bool"    && return Bool
     dt == "uint8"   && return UInt8
     dt == "uint16"  && return UInt16
     dt == "uint32"  && return UInt32
@@ -45,6 +46,7 @@ function _zdtype_to_julia(dt::String)
 end
 
 function _zjulia_to_dtype(::Type{T}) where T
+    T == Bool    && return "bool"
     T == UInt8   && return "uint8"
     T == UInt16  && return "uint16"
     T == UInt32  && return "uint32"

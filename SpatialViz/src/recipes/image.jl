@@ -86,8 +86,24 @@ function _image_to_heatmap_args(P, img::SpatialImage, channel::Int)
         y_ext = sampler.y_range !== nothing ? sampler.y_range : (1.0, Float64(ny_s))
         return Makie.convert_arguments(P, x_ext, y_ext, resampler)
     else
-        mat = collect(Float32.(data_2d))
-        return Makie.convert_arguments(P, 1:nx, 1:ny, permutedims(mat))
+        # Downsample to at most MAX_PX on the long axis if no pyramid is present.
+        # Prevents materialising multi-GB arrays (e.g. full-slide CosMx morphology).
+        MAX_PX = 4096
+        if ny > MAX_PX || nx > MAX_PX
+            ratio  = ny / nx
+            ny_s   = ratio >= 1.0 ? min(ny, MAX_PX) : max(1, round(Int, min(nx, MAX_PX) * ratio))
+            nx_s   = ratio >= 1.0 ? max(1, round(Int, ny_s / ratio))  : min(nx, MAX_PX)
+            y_step = max(1, ny ÷ ny_s)
+            x_step = max(1, nx ÷ nx_s)
+            mat = collect(Float32.(data_2d[1:y_step:end, 1:x_step:end]))
+        else
+            mat = collect(Float32.(data_2d))
+        end
+        xr    = get(img.metadata, "x_range", nothing)
+        yr    = get(img.metadata, "y_range", nothing)
+        x_ext = xr !== nothing ? (Float64(xr[1]), Float64(xr[2])) : (1.0, Float64(nx))
+        y_ext = yr !== nothing ? (Float64(yr[1]), Float64(yr[2])) : (1.0, Float64(ny))
+        return Makie.convert_arguments(P, x_ext, y_ext, permutedims(mat))
     end
 end
 

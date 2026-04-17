@@ -2,10 +2,11 @@
     SpatialIO.jl
 
 Platform I/O layer for the STX_DEV spatial transcriptomics framework.
-Provides pluggable `PlatformReader` subtypes for Xenium, Visium, CosMx, and
-MERFISH vendor formats, plus round-trip interoperability with the Python
-SpatialData ecosystem via native Zarr/HDF5/Arrow/Parquet
-backends. All readers return `SpatialDataset` objects from SpatialOmicsBase.jl.
+Provides pluggable `PlatformReader` subtypes for Xenium, Visium, CosMx,
+and MERFISH vendor formats, plus round-trip
+interoperability with the Python SpatialData ecosystem via native
+Zarr/HDF5/Arrow/Parquet backends. All readers return `SpatialDataset`
+objects from SpatialOmicsBase.jl.
 
 ## Format-level I/O
 
@@ -29,7 +30,6 @@ using Arrow
 using CSV
 using Parquet2
 using JSON3
-using Printf: @sprintf
 using CodecZstd
 using DiskArrays
 using SparseArrays
@@ -43,7 +43,7 @@ using SpatialOmicsBase
 #
 # All public names are surfaced through the SpatialOmics umbrella:
 #   import SpatialOmics as SO
-#   SO.load_cosmx(path)
+#   SO.load(SO.CosMxReader(), path)
 #   SO.read(SO.Zarr(), path)
 #   SO.write(ds, path, SO.NativeH5())
 #
@@ -51,13 +51,13 @@ using SpatialOmicsBase
 # auto-importing names on `using SpatialIO`.
 # ---------------------------------------------------------------------------
 
-public read, write
+public read, write, load
 public StorageFormat, Zarr, NativeH5, AnnData, GeoJSON
 public TranscriptsParquet, CellsParquet, CellFeatureMatrixH5, TissuePositionsCSV
 public PlatformReader
 public XeniumReader, VisiumReader, CosMxReader, MerfishReader
 public validate_path, read_data, load_spatial_data
-public load_xenium, load_visium, load_cosmx, load_merfish
+public load_xenium, load_visium, load_merfish
 
 # ---------------------------------------------------------------------------
 
@@ -69,11 +69,11 @@ include("io.jl")
 include("readers/platform_reader.jl")
 include("readers/xenium.jl")
 include("readers/visium.jl")
-include("readers/cosmx.jl")
 include("readers/merfish.jl")
 include("spatialdata/zarr3.jl")
 include("spatialdata/from_spatialdata.jl")
 include("spatialdata/to_spatialdata.jl")
+include("readers/cosmx.jl")   # after zarr3/from_spatialdata — uses ZarrV3Array + _read_sd_image
 include("formats/parquet.jl")
 include("formats/hdf5.jl")
 include("formats/csv.jl")

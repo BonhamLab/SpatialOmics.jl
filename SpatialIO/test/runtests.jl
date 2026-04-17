@@ -3,25 +3,26 @@ using SpatialOmicsBase
 using DiskArrays
 using DataFrames
 using SparseArrays
+using GeometryBasics
 import SpatialIO
 import SpatialIO:
     PlatformReader,
     XeniumReader, VisiumReader, CosMxReader, MerfishReader,
-    validate_path, read_data,
+    validate_path, read_data, load,
     from_spatialdata, to_spatialdata,
     write_hdf5, read_hdf5, write_zarr, open_zarr
 
-const XENIUM_MOCK = joinpath(@__DIR__, "fixtures", "xenium_mock")
-const VISIUM_MOCK = joinpath(@__DIR__, "fixtures", "visium_mock")
+const XENIUM_MOCK    = joinpath(@__DIR__, "fixtures", "xenium_mock")
+const VISIUM_MOCK    = joinpath(@__DIR__, "fixtures", "visium_mock")
 const COSMX_MOCK  = joinpath(@__DIR__, "fixtures", "cosmx_mock")
 
 @testset "SpatialIO.jl" begin
 
     @testset "PlatformReader abstract type" begin
-        @test XeniumReader <: PlatformReader
-        @test VisiumReader <: PlatformReader
-        @test CosMxReader  <: PlatformReader
-        @test MerfishReader <: PlatformReader
+        @test XeniumReader   <: PlatformReader
+        @test VisiumReader   <: PlatformReader
+        @test CosMxReader <: PlatformReader
+        @test MerfishReader  <: PlatformReader
     end
 
     @testset "Reader construction (kwarg defaults)" begin
@@ -35,43 +36,84 @@ const COSMX_MOCK  = joinpath(@__DIR__, "fixtures", "cosmx_mock")
 
         cr = CosMxReader()
         @test cr.lazy == true
-        @test isnothing(cr.fov_subset)
+        @test isnothing(cr.sample)
+        @test isnothing(cr.morphology_dir)
+        @test cr.morphology_channel == 1
 
         mr = MerfishReader()
         @test mr.lazy == true
         @test mr.z_slice == 2
     end
 
-    @testset "XeniumReader.validate_path with mock data" begin
-        xr = XeniumReader()
-        # The mock directory has the required sentinel files
-        @test validate_path(xr, XENIUM_MOCK)
-        # A non-existent path should fail validation
-        @test !validate_path(xr, "/nonexistent/path")
+    @testset "XeniumReader.validate_path" begin
+        @test  validate_path(XeniumReader(), XENIUM_MOCK)
+        @test !validate_path(XeniumReader(), "/nonexistent/path")
     end
 
-    @testset "VisiumReader.validate_path with mock data" begin
-        vr = VisiumReader()
-        @test validate_path(vr, VISIUM_MOCK)
-        @test !validate_path(vr, "/nonexistent/path")
+    @testset "VisiumReader.validate_path" begin
+        @test  validate_path(VisiumReader(), VISIUM_MOCK)
+        @test !validate_path(VisiumReader(), "/nonexistent/path")
     end
 
     @testset "read_data raises NotImplemented (stub guard)" begin
-        xr = XeniumReader()
-        @test_throws ErrorException read_data(xr, XENIUM_MOCK)
-
-        vr = VisiumReader()
-        @test_throws ErrorException read_data(vr, VISIUM_MOCK)
+        @test_throws ErrorException read_data(XeniumReader(), XENIUM_MOCK)
+        @test_throws ErrorException read_data(VisiumReader(), VISIUM_MOCK)
     end
 
-    @testset "CosMxReader.validate_path with mock data" begin
-        cr = CosMxReader()
-        # Accepts path containing DecodedFiles/ as direct child
-        @test validate_path(cr, COSMX_MOCK)
-        # Also accepts path pointing directly at DecodedFiles/
-        @test validate_path(cr, joinpath(COSMX_MOCK, "DecodedFiles"))
-        @test !validate_path(cr, "/nonexistent/path")
+    # ── CosMxReader ────────────────────────────────────────────────────────
+
+    @testset "CosMxReader validate_path" begin
+        # Root dir containing flatFiles/
+        @test  validate_path(CosMxReader(), COSMX_MOCK)
+        # Direct sample dir (contains *_tx_file.csv.gz)
+        sample_dir = joinpath(COSMX_MOCK, "flatFiles", "mock_sample")
+        @test  validate_path(CosMxReader(), sample_dir)
+        @test !validate_path(CosMxReader(), "/nonexistent/path")
     end
+
+    @testset "CosMxReader read_data" begin
+        ds = read_data(CosMxReader(), COSMX_MOCK)
+
+        # Transcripts — 3 rows in mock tx_file
+        @test haskey(ds.points, "transcripts")
+        pts = ds.points["transcripts"]
+        @test size(pts.coordinates, 1) == 3
+        @test size(pts.coordinates, 2) == 2
+
+        # Cell boundaries — 2 cells in mock polygons file
+        @test haskey(ds.shapes, "cell_boundaries")
+        shp = ds.shapes["cell_boundaries"]
+        @test length(shp.geometries) == 2
+        # Geometries are WKB-encoded bytes
+        @test shp.geometries[1] isa Vector{UInt8}
+
+        # Expression table — 2 cells × 3 genes
+        @test haskey(ds.tables, "expression")
+        tbl = ds.tables["expression"]
+        @test size(tbl.data, 1) == 2
+        @test size(tbl.data, 2) == 3
+        @test tbl.var.gene == ["Gapdh", "Actb", "Mki67"]
+
+        # Metadata
+        @test ds.metadata["format"] == "CosMx"
+        @test ds.metadata["sample"] == "mock_sample"
+    end
+
+    @testset "CosMxReader load dispatch" begin
+        ds = load(CosMxReader(), COSMX_MOCK)
+        @test ds isa SpatialDataset
+    end
+
+    @testset "CosMxReader explicit sample name" begin
+        ds = read_data(CosMxReader(; sample="mock_sample"), COSMX_MOCK)
+        @test ds isa SpatialDataset
+    end
+
+    @testset "CosMxReader bad sample name" begin
+        @test_throws ErrorException read_data(CosMxReader(; sample="no_such"), COSMX_MOCK)
+    end
+
+    # ── SpatialData round-trip ────────────────────────────────────────────────
 
     @testset "from_spatialdata — missing path returns error" begin
         @test_throws ErrorException from_spatialdata("/nonexistent/path.zarr")

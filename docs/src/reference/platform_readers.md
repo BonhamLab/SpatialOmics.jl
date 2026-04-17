@@ -13,7 +13,7 @@ read_data
 
 ```@docs
 CosMxReader
-load_cosmx
+load
 ```
 
 ## Xenium

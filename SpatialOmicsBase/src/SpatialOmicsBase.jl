@@ -40,12 +40,12 @@ export transform_coordinates, compose_transformations, invert_transformation
 # Spatial query primitives
 export SpatialExtent
 export SpatialElementView, SpatialDatasetView
-export extent, intersects
+export extent, intersects, crop
 # filter(roi, key) is public but unexported — conflicts with Base.filter at call sites.
 # Access qualified: SpatialOmicsBase.filter(roi, key) or SO.filter(roi, key).
 public filter
 
-# Pyramid sampler (for Makie.Resampler integration)
+# Pyramid sampler and tile mosaic
 export ImagePyramidSampler
 
 # ---------------------------------------------------------------------------

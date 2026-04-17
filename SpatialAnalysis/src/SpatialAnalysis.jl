@@ -2,10 +2,9 @@
     SpatialAnalysis.jl
 
 Analysis core for the STX_DEV spatial transcriptomics framework.
-Provides four functional sub-modules: QualityControl, Preprocessing,
-SpatialStatistics, and CellInteraction. All public functions are pure (or
-explicitly documented as not pure), enabling straightforward parallelisation
-via ThreadsX.jl and Distributed.jl.
+Spatial statistics, QC, preprocessing, and cell interaction functions.
+All public functions are pure (or explicitly documented as not pure),
+enabling straightforward parallelisation via ThreadsX.jl and Distributed.jl.
 """
 module SpatialAnalysis
 
@@ -15,23 +14,28 @@ using ThreadsX
 using SpatialOmicsBase
 
 # ---------------------------------------------------------------------------
-# Sub-modules
+# Sub-modules (QC, Preprocessing, CellInteraction)
 # ---------------------------------------------------------------------------
 
+# TODO: All of these files should be direct in src/
+# Subfolders unnecessary
 include("qc/QualityControl.jl")
 include("preprocessing/Preprocessing.jl")
-include("statistics/SpatialStatistics.jl")
 include("interaction/CellInteraction.jl")
 
-# Bring sub-module exports into the SpatialAnalysis namespace so callers can
-# do either `using SpatialAnalysis` or `using SpatialAnalysis.QualityControl`.
+# TODO: Quit it with the namespaces. Packages don't need tons of submodules
 using .QualityControl
 using .Preprocessing
-using .SpatialStatistics
 using .CellInteraction
 
 # ---------------------------------------------------------------------------
-# Re-export everything from sub-modules
+# Statistics — included directly (no submodule namespace)
+# ---------------------------------------------------------------------------
+
+include("statistics/SpatialStatistics.jl")
+
+# ---------------------------------------------------------------------------
+# Exports
 # ---------------------------------------------------------------------------
 
 # QualityControl
@@ -39,9 +43,11 @@ export filter_spots, detect_artifacts, spatially_aware_qc
 
 # Preprocessing
 export normalize_counts, correct_batch_effects, impute_missing
+export crop
 
-# SpatialStatistics
+# Statistics (owned by SpatialAnalysis directly)
 export spatial_autocorrelation, hotspot_detection, spatial_clustering
+export distances, classify_cells
 
 # CellInteraction
 export ligand_receptor_analysis, neighborhood_analysis, communication_score

@@ -1,388 +1,394 @@
 # SpatialIO/src/readers/cosmx.jl
-# Reader for NanoString/Bruker CosMx SMI data in the DecodedFiles export layout.
+# Reader for NanoString/Bruker CosMx SMI raw export data.
+using Statistics: mean
 #
-# DecodedFiles layout (as of 2024-era exports):
+# Raw export layout (slide-level gzipped CSVs):
 #
-#   <run_name>/
-#   └── DecodedFiles/
-#       └── <slide_name>/
-#           └── <run_timestamp>/
-#               ├── plex-<id>.txt                     # gene panel (DisplayName, CodeClass, ProbeID)
-#               └── CellStatsDir/
-#                   ├── CellComposite/
-#                   │   └── CellComposite_F<N>.jpg    # composite images per FOV
-#                   ├── CellOverlay/
-#                   │   └── CellOverlay_F<N>.jpg
-#                   ├── Morphology2D/                 # may be empty
-#                   ├── Segmentation_<uuid>_<N>/      # alternative segmentation results (skip)
-#                   └── FOV<N:05d>/                   # primary segmentation, one dir per FOV
-#                       ├── CellBoundaries_F<N>.csv   # fov,cellID,x_local,y_local
-#                       ├── CellBoundaries_F<N>_<cellID>.fz   # binary; not parsed
-#                       ├── CellLabels_F<N>.tif       # cell label raster (Gray{N0f16}, 4256×4256)
-#                       ├── CompartmentLabels_F<N>.tif
-#                       ├── Run_<uuid>_<timestamp>_Cell_Stats_F<N>.csv
-#                       │     columns: CellId, Area, AspectRatio, CenterX, CenterY,
-#                       │              Width, Height, Mean-<marker>, Max-<marker>, ...
-#                       └── Run_<uuid>_FOV<N:05d>__complete_code_cell_target_call_coord.csv
-#                             columns: CellComp, CellId, ..., codeclass, fov,
-#                                      seed_x, seed_y, target, x, y, z
-
+#   <root>/
+#   └── flatFiles/
+#       └── <sample_name>/                                       ← sample dir
+#           ├── <sample>_tx_file.csv.gz                         # transcripts (global coords)
+#           ├── <sample>_fov_positions_file.csv.gz              # FOV origins
+#           ├── <sample>-polygons.csv.gz                        # cell polygon vertices (global coords)
+#           ├── <sample>_metadata_file.csv.gz                   # per-cell metadata
+#           └── <sample>_exprMat_file.csv.gz                    # expression matrix
+#   └── RawFiles/
+#       └── <sample_name>/<run_timestamp>/CellStatsDir/
+#           └── Morphology2D/                                   # per-FOV TIF files
+#               └── <run>_C902_P99_N99_F<N:05d>.TIF
+#
 # Coordinate notes:
-#   - x, y in transcript CSV are FOV-local float pixel coordinates (0–4255.9).
-#   - seed_x, seed_y are 10× sub-pixel coordinates relative to x, y.
-#   - z = -1 indicates the projection plane; 0–7 are z-stack planes.
-#   - No global positions file is present in this export format; global
-#     stitching must be deferred or computed externally.
-#   - FOV numbering is non-contiguous; always discover FOVs by scanning FOV* dirs.
-#   - FOV image size is read from CellLabels TIF header (do not hardcode).
+#   - x_global_px, y_global_px are already stitched in the raw-export CSVs.
+#   - FOV coordinate relationship: x_global = x_fov_pos + x_local
+#                                  y_global = y_fov_pos - y_local  (y-flip)
+#   - TIF row 1 corresponds to y_local=0, i.e. y_global = y_fov_pos.
+#   - FOV positions from fov_positions_file give the top-left corner of each FOV:
+#       x_origin = x_global_px  (global x of TIF col 1)
+#       y_origin = y_global_px  (global y of TIF row 1)
 
 """
     CosMxReader
 
-Reader for NanoString/Bruker CosMx SMI output in the DecodedFiles export format.
+Reader for NanoString/Bruker CosMx SMI raw export output.
 
 Fields
 ------
-- `lazy`        : Bool — defer loading large arrays until accessed (default true)
-- `fov_subset`  : Union{Nothing, Vector{Int}} — restrict to specific FOV numbers,
-                  or `nothing` to read all discovered FOVs (default nothing)
+- `lazy`             : Bool — reserved for future lazy transcript loading (default true)
+- `sample`           : String or nothing — sample name (e.g. "mw_mus_p1_11"); auto-detected if nothing
+- `morphology_dir`   : String or nothing — path to Morphology2D/ directory containing per-FOV TIFs
+- `morphology_channel` : Int — which TIF channel to load (1-based; Morphology2D TIFs are 5-channel)
+- `morphology_zarr`   : String or nothing — path where the morphology zarr store is written.
+                        Defaults to a `morphology_cache.zarr` directory next to `morphology_dir`.
+                        If the zarr already exists it is opened directly (no re-transcoding).
+
+# Example
+```julia
+import SpatialIO as SIO
+ds = SIO.load(SIO.CosMxReader(), "/data/my_experiment")
+ds = SIO.load(SIO.CosMxReader(; morphology_dir="/data/RawFiles/Morphology2D"), "/data/my_experiment")
+ds = SIO.load(SIO.CosMxReader(; morphology_dir="/data/RawFiles/Morphology2D",
+                                morphology_zarr="/cache/morphology.zarr"), "/data/my_experiment")
+```
 """
 Base.@kwdef struct CosMxReader <: PlatformReader
     lazy::Bool = true
-    fov_subset::Union{Nothing, Vector{Int}} = nothing
+    sample::Union{Nothing, String} = nothing
+    morphology_dir::Union{Nothing, String} = nothing
+    morphology_channel::Int = 1
+    morphology_zarr::Union{Nothing, String} = nothing
 end
 
-"""
-    load_cosmx(path; lazy=true, fov_subset=nothing) -> SpatialDataset
+# ─── Path validation ──────────────────────────────────────────────────────────
 
-High-level convenience wrapper around `CosMxReader`.
-
-`path` should point to the run directory containing `DecodedFiles/`, or any
-directory in the hierarchy down to and including `CellStatsDir`.
-"""
-function load_cosmx(
-    path::String;
-    lazy::Bool = true,
-    fov_subset::Union{Nothing, Vector{Int}} = nothing,
-)
-    return load_spatial_data(path, CosMxReader; lazy = lazy, fov_subset = fov_subset)
-end
-
-"""
-    validate_path(reader::CosMxReader, path::String) -> Bool
-
-Return `true` if `path` looks like a CosMx DecodedFiles export.
-"""
 function validate_path(reader::CosMxReader, path::String)::Bool
     isdir(path) || return false
-    basename(path) == "CellStatsDir" && return true
-    basename(path) == "DecodedFiles" && return true
-    return isdir(joinpath(path, "DecodedFiles"))
+    # Direct sample dir: contains *_tx_file.csv.gz
+    any(endswith(f, "_tx_file.csv.gz") for f in readdir(path)) && return true
+    # Parent with flatFiles/ subdir
+    ff = joinpath(path, "flatFiles")
+    isdir(ff) || return false
+    # At least one sample subdir exists
+    return any(isdir(joinpath(ff, d)) for d in readdir(ff))
 end
 
-# ─── Directory walking ────────────────────────────────────────────────────────
+# ─── Sample directory discovery ───────────────────────────────────────────────
 
 """
-    find_cell_stats_dir(root::String) -> (cell_stats_dir, run_dir)
+    _find_cosmx_sample(path, sample_name) -> sample_dir
 
-Walk from `root` to `CellStatsDir` and return both the CellStatsDir path and
-the run-timestamp directory (parent of CellStatsDir, which contains plex-*.txt).
+Walk from `path` to the CosMx sample directory. Returns the directory that
+directly contains the gzipped CSVs.
 
-Accepts any of:
-  - the run name dir containing DecodedFiles/
-  - the DecodedFiles/ dir itself
-  - the slide dir
-  - the run-timestamp dir
-  - CellStatsDir itself
+Accepts:
+  - sample dir itself (contains `*_tx_file.csv.gz`)
+  - parent dir containing `flatFiles/<sample>/`
 """
-function find_cell_stats_dir(root::String)
-    isdir(root) || error("find_cell_stats_dir: not a directory: $root")
-
-    # Already at CellStatsDir
-    if basename(root) == "CellStatsDir"
-        return root, dirname(root)
+function _find_cosmx_sample(path::String, sample_name::Union{Nothing,String})
+    # Already in a sample dir?
+    if any(endswith(f, "_tx_file.csv.gz") for f in readdir(path))
+        return path
     end
+    ff = joinpath(path, "flatFiles")
+    isdir(ff) || error("CosMxReader: cannot locate sample directory in $path")
+    samples = sort(filter(d -> isdir(joinpath(ff, d)), readdir(ff)))
+    isempty(samples) && error("CosMxReader: no sample subdirs in $ff")
+    if sample_name !== nothing
+        sample_name in samples ||
+            error("CosMxReader: sample '$sample_name' not found in $ff; available: $samples")
+        return joinpath(ff, sample_name)
+    end
+    length(samples) > 1 &&
+        @warn "CosMxReader: multiple samples found in $ff, using '$(samples[1])'"
+    return joinpath(ff, samples[1])
+end
 
-    # Descend through DecodedFiles → slide → run → CellStatsDir
-    df_root = if basename(root) == "DecodedFiles"
-        root
-    elseif isdir(joinpath(root, "DecodedFiles"))
-        joinpath(root, "DecodedFiles")
-    else
-        # Maybe root IS slide or run dir — try looking for CellStatsDir directly
-        csd = joinpath(root, "CellStatsDir")
-        isdir(csd) && return csd, root
-        # One level up: root is slide dir
-        runs = _sorted_subdirs(root)
-        for r in reverse(runs)
-            csd = joinpath(root, r, "CellStatsDir")
-            isdir(csd) && return csd, joinpath(root, r)
+# ─── File locators ────────────────────────────────────────────────────────────
+
+function _locate_cosmx_files(sample_dir::String)
+    # Exclude macOS AppleDouble resource-fork files (._*) which are metadata-only
+    files = filter(f -> !startswith(f, "._"), readdir(sample_dir))
+    _find(suffix) = begin
+        idx = findfirst(f -> endswith(f, suffix), files)
+        isnothing(idx) && error("CosMxReader: no file ending '$suffix' in $sample_dir")
+        joinpath(sample_dir, files[idx])
+    end
+    return (
+        tx        = _find("_tx_file.csv.gz"),
+        fov_pos   = _find("_fov_positions_file.csv.gz"),
+        polygons  = _find("-polygons.csv.gz"),
+        metadata  = _find("_metadata_file.csv.gz"),
+        expr_mat  = _find("_exprMat_file.csv.gz"),
+    )
+end
+
+# ─── FOV positions ────────────────────────────────────────────────────────────
+
+function _read_fov_positions(path::String)
+    df = CSV.read(path, DataFrame;
+                  types = Dict("FOV" => Int32, "x_global_px" => Int32, "y_global_px" => Int32))
+    return Dict{Int, NamedTuple{(:x, :y), Tuple{Int, Int}}}(
+        row.FOV => (x = Int(row.x_global_px), y = Int(row.y_global_px))
+        for row in eachrow(df)
+    )
+end
+
+# ─── Transcripts ─────────────────────────────────────────────────────────────
+
+function _read_transcripts(path::String)
+    tx = CSV.read(path, DataFrame;
+                  select = ["fov", "cell_ID", "cell", "x_global_px", "y_global_px", "z", "target", "CellComp"],
+                  types  = Dict("fov" => Int32, "cell_ID" => Int32,
+                                "x_global_px" => Float32, "y_global_px" => Float32,
+                                "z" => Int8))
+    coords = Matrix{Float32}(hcat(tx.x_global_px, tx.y_global_px))
+    feats  = select(tx, Not([:x_global_px, :y_global_px]))
+    return SpatialPoints(coords, feats, Dict{String,Any}("coord_cols" => ["x", "y"]))
+end
+
+# ─── Cell polygons ────────────────────────────────────────────────────────────
+
+function _read_polygons(path::String)
+    poly_df = CSV.read(path, DataFrame;
+                       select = ["fov", "cellID", "cell", "x_global_px", "y_global_px"],
+                       types  = Dict("fov" => Int32, "cellID" => Int32,
+                                     "x_global_px" => Float64, "y_global_px" => Float64))
+
+    grouped    = groupby(poly_df, :cell)
+    n_cells    = length(grouped)
+    geometries = Vector{Vector{UInt8}}(undef, n_cells)
+    obs        = DataFrame(cell      = String[],
+                           fov       = Int32[],
+                           cell_ID   = Int32[],
+                           x_centroid = Float64[],
+                           y_centroid = Float64[])
+
+    for (k, (key, grp)) in enumerate(pairs(grouped))
+        xs = grp.x_global_px
+        ys = grp.y_global_px
+        ring = Point2f.(xs, ys)
+        # Ensure ring is closed for WKB (first == last)
+        if ring[1] != ring[end]
+            push!(ring, ring[1])
         end
-        error("find_cell_stats_dir: cannot locate CellStatsDir from $root")
+        poly          = GeometryBasics.Polygon(ring)
+        geometries[k] = _encode_wkb_polygon(poly)
+        push!(obs, (cell       = string(key.cell),
+                    fov        = grp.fov[1],
+                    cell_ID    = grp.cellID[1],
+                    x_centroid = mean(xs),
+                    y_centroid = mean(ys)))
     end
 
-    slides = _sorted_subdirs(df_root)
-    isempty(slides) && error("find_cell_stats_dir: no slide dirs in $df_root")
-    length(slides) > 1 &&
-        @warn "find_cell_stats_dir: multiple slides found, using $(slides[1])"
-    slide_path = joinpath(df_root, slides[1])
-
-    runs = _sorted_subdirs(slide_path)
-    isempty(runs) && error("find_cell_stats_dir: no run dirs in $slide_path")
-    length(runs) > 1 &&
-        @warn "find_cell_stats_dir: multiple runs found, using most recent: $(last(runs))"
-    run_path = joinpath(slide_path, last(runs))
-
-    csd = joinpath(run_path, "CellStatsDir")
-    isdir(csd) || error("find_cell_stats_dir: CellStatsDir not found in $run_path")
-    return csd, run_path
+    return SpatialShapes(geometries, obs, Dict{String,Any}())
 end
 
-_sorted_subdirs(dir) = sort(filter(d -> isdir(joinpath(dir, d)), readdir(dir)))
+# ─── Expression matrix + metadata → SpatialTable ─────────────────────────────
 
-"""
-    discover_fovs(cell_stats_dir::String) -> Vector{Int}
+function _read_expression(expr_path::String, meta_path::String)
+    meta = CSV.read(meta_path, DataFrame)
+    expr = CSV.read(expr_path, DataFrame;
+                    types = Dict("fov" => Int32, "cell_ID" => Int32))
 
-Scan `cell_stats_dir` for FOV<N> subdirectories and return sorted FOV numbers.
-Non-contiguous FOV numbering is expected and handled correctly.
-"""
-function discover_fovs(cell_stats_dir::String)::Vector{Int}
-    skip = Set(["CellComposite", "CellOverlay", "Morphology2D"])
-    fov_ids = Int[]
-    for d in readdir(cell_stats_dir)
-        d in skip && continue
-        startswith(d, "Segmentation_") && continue
-        m = match(r"^FOV(\d+)$", d)
+    # Join key: "fov:cell_ID"
+    meta_key = string.(meta.fov, ":", meta.cell_ID)
+    expr_key = string.(expr.fov, ":", expr.cell_ID)
+
+    # Align expression rows to metadata order
+    order = indexin(meta_key, expr_key)
+    any(isnothing, order) &&
+        error("CosMxReader: $(count(isnothing, order)) metadata cells missing from expression matrix")
+    expr_sorted = expr[order, :]
+
+    gene_names = names(expr)[3:end]   # skip fov, cell_ID
+    X_dense    = Matrix{Float32}(expr_sorted[:, gene_names])
+    X_sparse   = sparse(X_dense)
+    obs = select(meta, Not(intersect(names(meta), ["_key"])))
+    var = DataFrame(gene = gene_names)
+
+    return SpatialTable(X_sparse, obs, var,
+                        Dict{String,Any}("instance_key" => "cell",
+                                         "region"       => "cell_boundaries"))
+end
+
+# ─── FOV grid → SpatialShapes ────────────────────────────────────────────────
+#
+# Stores each FOV as a rectangular polygon.  The features DataFrame carries
+# pre-computed bbox columns so extent(ds.shapes["fovs"], i) is a fast lookup.
+
+function _build_fov_shapes(
+    fov_dict::Dict{Int, NamedTuple{(:x,:y),Tuple{Int,Int}}},
+    fov_h::Int,
+    fov_w::Int,
+)::SpatialShapes
+    fov_ids = sort(collect(keys(fov_dict)))
+    geoms   = Vector{Any}(undef, length(fov_ids))
+    obs     = DataFrame(
+        fov_id     = Int32[],
+        xmin       = Float64[],
+        xmax       = Float64[],
+        ymin       = Float64[],
+        ymax       = Float64[],
+        x_centroid = Float64[],
+        y_centroid = Float64[],
+    )
+    for (k, fov_id) in enumerate(fov_ids)
+        pos  = fov_dict[fov_id]
+        xmin = Float64(pos.x)
+        xmax = Float64(pos.x + fov_w - 1)
+        ymax = Float64(pos.y)                # TIF row 1 = highest global y
+        ymin = Float64(pos.y - fov_h + 1)
+        ring = GeometryBasics.Point2f[
+            (xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax), (xmin, ymin),
+        ]
+        geoms[k] = GeometryBasics.Polygon(ring)
+        push!(obs, (Int32(fov_id), xmin, xmax, ymin, ymax,
+                    (xmin + xmax) / 2, (ymin + ymax) / 2))
+    end
+    return SpatialShapes(geoms, obs, Dict{String,Any}())
+end
+
+# ─── Morphology2D → zarr-backed SpatialImage ─────────────────────────────────
+#
+# Transcodes per-FOV TIF tiles into a single OME-NGFF zarr array on first load.
+# Subsequent loads reopen the existing zarr directly — no re-transcoding.
+#
+# Array layout: (1, slide_height, slide_width) — OME-NGFF (c, y, x).
+# Chunk layout: one chunk per FOV tile = (1, fov_height, fov_width).
+# Y-flip: TIF row 1 (top of microscopy = highest global y) → last zarr row in
+# the chunk, so zarr y index 0 = slide_ymin (bottom of slide).
+
+function _write_morphology_zarr(
+    zarr_path     ::String,
+    morphology_dir::String,
+    fov_dict      ::Dict{Int, NamedTuple{(:x,:y),Tuple{Int,Int}}},
+    channel       ::Int,
+)::SpatialImage
+    # Fast path: zarr already built — open directly.
+    if isdir(zarr_path) && isfile(joinpath(zarr_path, "zarr.json"))
+        @info "CosMxReader: reusing cached morphology zarr" zarr_path
+        return _read_sd_image(zarr_path)
+    end
+
+    @info "CosMxReader: transcoding Morphology2D TIFs to zarr" zarr_path channel
+
+    # Discover TIF files: *_F<NNNNN>.TIF (case-insensitive)
+    fov_paths = Dict{Int, String}()
+    for f in readdir(morphology_dir)
+        m = match(r"_F(\d+)\.TIF$"i, f)
         isnothing(m) && continue
-        push!(fov_ids, parse(Int, m[1]))
+        fov_paths[parse(Int, m[1])] = joinpath(morphology_dir, f)
     end
-    return sort(fov_ids)
-end
+    isempty(fov_paths) &&
+        error("CosMxReader: no TIF files found in $morphology_dir (pattern: *_F<N>.TIF)")
 
-# ─── Per-FOV file locators ────────────────────────────────────────────────────
+    # FOV dimensions from sample TIF (lazyio avoids loading pixels)
+    sample_path = fov_paths[first(sort(collect(keys(fov_paths))))]
+    sample_tif  = TiffImages.load(sample_path; lazyio = true)
+    fov_h, fov_w = size(sample_tif, 1), size(sample_tif, 2)
 
-function _fov_dir(cell_stats_dir, fov_id)
-    joinpath(cell_stats_dir, @sprintf("FOV%05d", fov_id))
-end
+    # Restrict to FOVs with both a TIF and a known grid position
+    fov_ids   = sort(filter(f -> haskey(fov_dict, f), collect(keys(fov_paths))))
+    isempty(fov_ids) &&
+        error("CosMxReader: no overlap between TIF files and fov_positions — check morphology_dir")
+    x_origins = Int[fov_dict[f].x for f in fov_ids]
+    y_origins = Int[fov_dict[f].y for f in fov_ids]
 
-function _locate_transcript_csv(fov_dir, fov_id)
-    pattern = Regex("^Run_.*_FOV$(lpad(fov_id, 5, '0'))__complete_code_cell_target_call_coord\\.csv\$")
-    f = _find_file(fov_dir, pattern)
-    if isnothing(f)
-        @warn "No transcript CSV found for FOV $fov_id in $fov_dir — skipping transcripts for this FOV"
+    slide_xmin   = minimum(x_origins)
+    slide_xmax   = maximum(x_origins) + fov_w - 1
+    slide_ymin   = minimum(y_origins) - fov_h + 1
+    slide_ymax   = maximum(y_origins)
+    slide_width  = slide_xmax - slide_xmin + 1
+    slide_height = slide_ymax - slide_ymin + 1
+
+    # ── Write zarr store ──────────────────────────────────────────────────────
+
+    mkpath(zarr_path)
+    _zwrite_group(zarr_path, Dict{String,Any}(
+        "x_range" => [slide_xmin, slide_xmax],
+        "y_range" => [slide_ymin, slide_ymax],
+    ))
+
+    array_path  = joinpath(zarr_path, "0")
+    chunk_shape = (1, fov_h, fov_w)
+    mkpath(joinpath(array_path, "c"))
+    Base.write(joinpath(array_path, "zarr.json"), JSON3.write(Dict(
+        "zarr_format"  => 3,
+        "node_type"    => "array",
+        "shape"        => [1, slide_height, slide_width],
+        "data_type"    => "float32",
+        "chunk_grid"   => Dict("name" => "regular",
+                               "configuration" => Dict("chunk_shape" => collect(chunk_shape))),
+        "chunk_key_encoding" => Dict("name" => "default",
+                                     "configuration" => Dict("separator" => "/")),
+        "fill_value"   => 0,
+        "codecs"       => [
+            Dict("name" => "bytes", "configuration" => Dict("endian" => "little")),
+            Dict("name" => "zstd",  "configuration" => Dict("level" => 0, "checksum" => false)),
+        ],
+        "attributes"   => Dict{String,Any}(),
+        "storage_transformers" => [],
+    )))
+
+    for (fi, fov_id) in enumerate(fov_ids)
+        xo = x_origins[fi]
+        yo = y_origins[fi]
+        chunk_x = div(xo - slide_xmin, fov_w)
+        chunk_y = div(yo - fov_h + 1 - slide_ymin, fov_h)
+
+        tif = TiffImages.load(fov_paths[fov_id]; lazyio = true)
+        raw = ndims(tif) == 3 ? tif[:, :, channel] : tif[:, :]
+        tile_flip = reverse(Float32.(raw); dims = 1)   # y-flip: TIF top → zarr bottom
+        tile_3d   = reshape(tile_flip, 1, fov_h, fov_w)
+        raw_bytes = reinterpret(UInt8, vec(permutedims(tile_3d, (3, 2, 1))))
+        compressed = _zcompress(collect(raw_bytes))
+
+        cpath = _chunk_path(array_path, (0, chunk_y, chunk_x))
+        mkpath(dirname(cpath))
+        Base.write(cpath, compressed)
     end
-    return f
-end
 
-function _locate_cell_stats_csv(fov_dir, fov_id)
-    pattern = Regex("^Run_.*_Cell_Stats_F$(lpad(fov_id, 5, '0'))\\.csv\$")
-    f = _find_file(fov_dir, pattern)
-    isnothing(f) && error("Cell stats CSV not found in $fov_dir")
-    return f
-end
-
-function _find_file(dir, pattern::Regex)
-    for f in readdir(dir)
-        occursin(pattern, f) && return joinpath(dir, f)
-    end
-    return nothing
-end
-
-# ─── Plex / gene panel ────────────────────────────────────────────────────────
-
-function _find_plex_file(run_dir)
-    for f in readdir(run_dir)
-        startswith(f, "plex-") && endswith(f, ".txt") && return joinpath(run_dir, f)
-    end
-    return nothing
-end
-
-function _read_plex(path)
-    isnothing(path) && return DataFrame(DisplayName=String[], CodeClass=String[], ProbeID=String[])
-    return CSV.read(path, DataFrame)
-end
-
-# ─── TIF dimension reader ─────────────────────────────────────────────────────
-
-"""Read only the (height, width) from a TIFF header without loading pixel data."""
-function _tif_size(path)
-    img = TiffImages.load(path; lazyio=true)
-    return size(img, 1), size(img, 2)   # drop trailing singleton channel dim
+    return _read_sd_image(zarr_path)
 end
 
 # ─── Main read_data ───────────────────────────────────────────────────────────
 
 function read_data(reader::CosMxReader, path::String)::SpatialDataset
-    cell_stats_dir, run_dir = find_cell_stats_dir(path)
+    sample_dir = _find_cosmx_sample(path, reader.sample)
+    sample_name = basename(sample_dir)
+    @info "CosMxReader: loading sample" sample=sample_name sample_dir
 
-    all_fov_ids = discover_fovs(cell_stats_dir)
-    fov_ids = if isnothing(reader.fov_subset)
-        all_fov_ids
-    else
-        ids = intersect(reader.fov_subset, all_fov_ids)
-        isempty(ids) && error("fov_subset $(reader.fov_subset) has no overlap with discovered FOVs $all_fov_ids")
-        sort(ids)
-    end
+    files    = _locate_cosmx_files(sample_dir)
+    fov_dict = _read_fov_positions(files.fov_pos)
 
-    plex_df = _read_plex(_find_plex_file(run_dir))
+    @info "CosMxReader: reading transcripts"
+    pts = _read_transcripts(files.tx)
 
-    # Accumulate per-FOV data
-    tx_frames    = Vector{DataFrame}(undef, length(fov_ids))
-    stats_frames = Vector{DataFrame}(undef, length(fov_ids))
-    bounds_frames = Vector{DataFrame}(undef, length(fov_ids))
-    fov_sizes    = Dict{Int, Tuple{Int,Int}}()   # fov_id => (h, w)
+    @info "CosMxReader: building cell polygons"
+    shp = _read_polygons(files.polygons)
 
-    for (i, fov_id) in enumerate(fov_ids)
-        fdir = _fov_dir(cell_stats_dir, fov_id)
-
-        tx_path = _locate_transcript_csv(fdir, fov_id)
-        tx = if isnothing(tx_path)
-            DataFrame(CellComp=String[], CellId=Int32[], codeclass=String[],
-                      fov=Int32[], target=String[],
-                      x=Float32[], y=Float32[], z=Int8[])
-        else
-            CSV.read(tx_path, DataFrame;
-                     select = ["CellComp", "CellId", "codeclass", "fov",
-                               "target", "x", "y", "z"],
-                     types  = Dict("fov" => Int32, "CellId" => Int32,
-                                   "x" => Float32, "y" => Float32,
-                                   "z" => Int8))
-        end
-        tx_frames[i] = tx
-
-        st = CSV.read(_locate_cell_stats_csv(fdir, fov_id), DataFrame)
-        st[!, :fov] .= Int32(fov_id)
-        stats_frames[i] = st
-
-        bc = CSV.read(joinpath(fdir, "CellBoundaries_F$(lpad(fov_id,5,'0')).csv"), DataFrame)
-        bounds_frames[i] = bc
-
-        tif_path = joinpath(fdir, "CellLabels_F$(lpad(fov_id,5,'0')).tif")
-        fov_sizes[fov_id] = _tif_size(tif_path)
-    end
-
-    all_tx    = vcat(tx_frames...)
-    all_stats = vcat(stats_frames...)
-    all_bounds = vcat(bounds_frames...)
+    @info "CosMxReader: reading expression matrix and cell metadata"
+    tbl = _read_expression(files.expr_mat, files.metadata)
 
     ds = spatial_dataset(; metadata = Dict{String,Any}(
-        "format"    => "CosMx-DecodedFiles",
-        "run_dir"   => run_dir,
-        "fov_ids"   => fov_ids,
-        "fov_sizes" => fov_sizes,
+        "format"      => "CosMx",
+        "sample"      => sample_name,
+        "sample_dir"  => sample_dir,
+        "fov_count"   => length(fov_dict),
     ))
 
-    # ── SpatialPoints — transcripts ───────────────────────────────────────────
-    coords = Matrix{Float32}(hcat(all_tx.x, all_tx.y))   # N×2
-    feat   = select(all_tx, Not([:x, :y]))
-    ds["transcripts"] = SpatialPoints(coords, feat, Dict{String,Any}())
+    ds["transcripts"]    = pts
+    ds["cell_boundaries"] = shp
+    ds["expression"]     = tbl
 
-    # ── SpatialTable — expression counts ─────────────────────────────────────
-    # Build a global cell key "fov_cellid" to uniquify cells across FOVs
-    endo_tx = filter(r -> r.codeclass == "Endogenous" && r.CellId > 0, all_tx)
-
-    if !isempty(endo_tx) && !isempty(plex_df)
-        expr_tbl = _build_expression_table(endo_tx, all_stats, plex_df)
-        ds["table"] = expr_tbl
-    end
-
-    # ── SpatialShapes — cell boundaries ──────────────────────────────────────
-    if !isempty(all_bounds)
-        shp = _build_shapes(all_bounds)
-        ds["cell_boundaries"] = shp
-    end
-
-    # ── SpatialImage — composite JPEGs (skip if lazy) ────────────────────────
-    if !reader.lazy
-        composite_dir = joinpath(cell_stats_dir, "CellComposite")
-        if isdir(composite_dir)
-            for fov_id in fov_ids
-                jpg = joinpath(composite_dir, "CellComposite_F$(lpad(fov_id,5,'0')).jpg")
-                isfile(jpg) || continue
-                img = _load_composite_jpg(jpg)
-                ds["composite_F$(lpad(fov_id,5,'0'))"] = img
-            end
-        end
+    if reader.morphology_dir !== nothing
+        zarr_path = something(reader.morphology_zarr,
+                              abspath(joinpath(reader.morphology_dir, "..", "morphology_cache.zarr")))
+        img = _write_morphology_zarr(zarr_path, reader.morphology_dir, fov_dict, reader.morphology_channel)
+        ds["morphology"] = img
+        # chunk shape is (c=1, y=fov_h, x=fov_w) — one chunk per FOV tile
+        fov_h, fov_w = img.data.chunk_shape[2], img.data.chunk_shape[3]
+        ds["fovs"] = _build_fov_shapes(fov_dict, fov_h, fov_w)
     end
 
     return ds
-end
-
-# ─── Expression count matrix ──────────────────────────────────────────────────
-
-function _build_expression_table(
-    endo_tx::DataFrame,
-    stats::DataFrame,
-    plex::DataFrame,
-)::SpatialTable
-    # Global cell index: "fov_cellid" string key → integer row index
-    cell_keys = sort(unique(string.(endo_tx.fov) .* "_" .* string.(endo_tx.CellId)))
-    cell_idx  = Dict(k => i for (i, k) in enumerate(cell_keys))
-    n_cells   = length(cell_keys)
-
-    # Gene index from plex (Endogenous only, preserving plex order)
-    gene_names = plex[plex.CodeClass .== "Endogenous", :DisplayName]
-    gene_idx   = Dict(g => i for (i, g) in enumerate(gene_names))
-    n_genes    = length(gene_names)
-
-    # Build COO lists
-    I_vals = Int32[]
-    J_vals = Int32[]
-    V_vals = Float32[]
-
-    for gdf in groupby(endo_tx, [:fov, :CellId, :target])
-        key = string(gdf.fov[1]) * "_" * string(gdf.CellId[1])
-        ci  = get(cell_idx, key, nothing)
-        gi  = get(gene_idx, gdf.target[1], nothing)
-        (isnothing(ci) || isnothing(gi)) && continue
-        push!(I_vals, ci)
-        push!(J_vals, gi)
-        push!(V_vals, Float32(nrow(gdf)))
-    end
-
-    X = sparse(I_vals, J_vals, V_vals, n_cells, n_genes)
-
-    # obs DataFrame — join cell metadata from stats
-    obs = DataFrame(cell_key = cell_keys)
-    obs[!, :fov]    = Int32.(parse.(Int, first.(split.(cell_keys, "_"))))
-    obs[!, :CellId] = Int32.(parse.(Int, last.(split.(cell_keys, "_"))))
-    stats_sub = select(stats, [:fov, :CellId, :Area, :CenterX, :CenterY])
-    leftjoin!(obs, stats_sub; on = [:fov, :CellId])
-    # Fill missing stats (cells present in transcripts but absent from cell stats)
-    for col in (:Area, :CenterX, :CenterY)
-        obs[!, col] = Int32.(coalesce.(obs[!, col], Int32(0)))
-    end
-
-    var = select(plex[plex.CodeClass .== "Endogenous", :], [:DisplayName, :CodeClass])
-    rename!(var, :DisplayName => :gene)
-
-    return SpatialTable(X, obs, var, Dict{String,Any}())
-end
-
-# ─── Cell boundary shapes ─────────────────────────────────────────────────────
-
-function _build_shapes(bounds::DataFrame)::SpatialShapes
-    # Group boundary vertices per (fov, cellID) → store as raw vertex matrix
-    # WKB encoding is deferred; geometries are Vector{Matrix{Int}} for now
-    geoms = Vector{Any}()
-    keys_df = unique(select(bounds, [:fov, :cellID]))
-    for row in eachrow(keys_df)
-        sub = bounds[(bounds.fov .== row.fov) .& (bounds.cellID .== row.cellID), :]
-        push!(geoms, Matrix{Int}(hcat(sub.x_local, sub.y_local)))
-    end
-    feat = copy(keys_df)
-    return SpatialShapes(geoms, feat, Dict{String,Any}())
-end
-
-# ─── Composite image loader ───────────────────────────────────────────────────
-
-function _load_composite_jpg(path::String)::SpatialImage
-    # FileIO is not a SpatialIO dep; use a basic JPEG read via ImageIO if available,
-    # otherwise store the path in metadata for later loading.
-    # TODO: add ImageIO as an optional dep and load lazily
-    return SpatialImage(
-        zeros(UInt8, 0, 0, 0),          # placeholder — not loaded
-        (;),
-        Dict{String,Any}("jpeg_path" => path),
-    )
 end

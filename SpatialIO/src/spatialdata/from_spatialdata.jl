@@ -136,6 +136,17 @@ function _read_sd_image(path::String)::SpatialImage
     # Parse coordinate transform; store normalisation parameters in metadata.
     _apply_ngff_transform!(img_meta, meta, size(arr))
 
+    # Fallback: if _apply_ngff_transform! found no transform, check for explicit
+    # x_range/y_range attributes written by _write_sd_image_tiles.
+    if !haskey(img_meta, "x_range") &&
+       haskey(meta, :attributes) &&
+       haskey(meta.attributes, :x_range) && haskey(meta.attributes, :y_range)
+        xr = meta.attributes.x_range
+        yr = meta.attributes.y_range
+        img_meta["x_range"] = (Float64(xr[1]), Float64(xr[2]))
+        img_meta["y_range"] = (Float64(yr[1]), Float64(yr[2]))
+    end
+
     return SpatialImage(arr, pyramid, ax_nt, img_meta)
 end
 
@@ -288,22 +299,19 @@ function _read_sd_points(path::String)::SpatialPoints
     (isfile(parquet_path) || isdir(parquet_path)) ||
         error("_read_sd_points: missing $parquet_path")
 
-    # Open the parquet file as a lazy dataset (satisfies Tables.istable).
-    # Coordinate columns are read eagerly (small); all other columns stay lazy.
-    lazy_ds = _open_parquet(parquet_path)
+    # Read all rows eagerly. Parquet2.Dataset(dir) returns 0 rows via Tables.jl
+    # for partitioned datasets, so we use _read_parquet (part-by-part vcat).
+    features_df = _read_parquet(parquet_path)
 
-    # Determine coordinate columns from metadata (default: x, y, z if present)
-    all_cols = String.(Tables.columnnames(lazy_ds))
+    # Determine coordinate columns from metadata (default: x, y)
+    all_cols = names(features_df)
     axes = haskey(meta, :attributes) && haskey(meta.attributes, :axes) ?
            String.(meta.attributes.axes) : ["x", "y"]
     coord_cols = [a for a in axes if a in all_cols]
     isempty(coord_cols) && (coord_cols = ["x", "y"])
 
-    # Eagerly read ONLY coordinate columns to build the N×D Float32 matrix.
-    coord_df = DataFrame(Parquet2.Dataset(parquet_path; readercolumns = Symbol.(coord_cols)))
-
-    # Build N×D Float32 coordinate matrix (hcat of column vectors → N×D)
-    coords = Matrix{Float32}(reduce(hcat, [Float32.(coord_df[!, c]) for c in coord_cols]))
+    # Build N×D Float32 coordinate matrix
+    coords = Matrix{Float32}(reduce(hcat, [Float32.(features_df[!, c]) for c in coord_cols]))
 
     # Apply the element-level coordinate transform (local → global).
     n_coord = length(coord_cols)
@@ -315,11 +323,9 @@ function _read_sd_points(path::String)::SpatialPoints
         end
     end
 
-    # Store the full lazy dataset as features. Materialise to DataFrame only
-    # when the user accesses a spatial view/crop or writes back to disk.
     return SpatialPoints(
         coords,
-        lazy_ds,
+        features_df,
         Dict{String,Any}("zarr_attrs" => meta, "coord_cols" => coord_cols),
     )
 end
@@ -616,6 +622,20 @@ function _read_parquet(path::String)::DataFrame
         return vcat([DataFrame(Parquet2.Dataset(p)) for p in parts]...)
     else
         error("_read_parquet: path not found: $path")
+    end
+end
+
+# Like _read_parquet but reads only the specified columns (avoids loading all columns
+# for large datasets where only coordinates are needed).
+function _read_parquet_cols(path::String, cols::Vector{Symbol})::DataFrame
+    if isfile(path)
+        return DataFrame(Parquet2.Dataset(path; readercolumns = cols))
+    elseif isdir(path)
+        parts = sort(filter(f -> endswith(f, ".parquet"), readdir(path, join=true)))
+        isempty(parts) && return DataFrame()
+        return vcat([DataFrame(Parquet2.Dataset(p; readercolumns = cols)) for p in parts]...)
+    else
+        error("_read_parquet_cols: path not found: $path")
     end
 end
 

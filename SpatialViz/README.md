@@ -1,5 +1,11 @@
 # SpatialViz.jl
 
-SpatialViz.jl is the visualization framework of the SpatialOmics.jl monorepo. It implements a multi-backend architecture built around the `VisualizationBackend` abstract type, with concrete backends for native Makie.jl (`MakieBackend`), browser-based WGLMakie/Bonito deployment (`WGLMakieBackend`/`BonitoBackend`), and Python Napari via PythonCall.jl (`NapariBackend`). The single public entry-point `spatial_plot()` handles all rendering across layers (points, images, labels, shapes) and backends; interactive tools for ROI selection, manual cell-type annotation, and colorblind-safe palettes are also provided. All backends depend on the `SpatialDataset` types from SpatialOmicsBase.jl.
+SpatialViz.jl is the visualization layer of the SpatialOmics.jl monorepo. It extends Makie.jl with spatial-omics-aware recipes for all `SpatialDataset` element types:
 
-**Status: stub — deferred to Phase 2.**
+- **`heatmap` / `heatmap!`** — renders `SpatialImage` with automatic coordinate registration from `x_range`/`y_range` metadata. When OME-Zarr pyramid levels are present, uses `Makie.Resampler` + `ImagePyramidSampler` for zoom-responsive lazy tile loading; falls back to downsampled materialize for non-pyramidal arrays.
+- **`scatter` / `scatter!`** — renders `SpatialPoints` with optional feature-column colouring.
+- **`poly` / `poly!`** — renders `SpatialShapes` (polygons, circles) with optional per-cell colouring.
+
+All recipes accept both the underlying element type (`SpatialImage`, `SpatialPoints`, `SpatialShapes`) and lazy `SpatialElementView{T}` objects returned by `view(ds, SpatialExtent(...))`, automatically applying axis limits to the view's extent.
+
+SpatialViz depends only on the abstract `Makie` package — users load a concrete backend (`CairoMakie`, `GLMakie`, or `WGLMakie`) before `using SpatialViz`.

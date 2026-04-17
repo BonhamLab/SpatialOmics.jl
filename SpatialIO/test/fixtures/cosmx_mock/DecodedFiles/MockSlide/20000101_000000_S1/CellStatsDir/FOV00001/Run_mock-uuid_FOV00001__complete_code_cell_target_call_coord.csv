@@ -1,3 +1,0 @@
-,CellComp,CellId,Spot1_count,Spot2_count,Spot3_count,Spot4_count,codeclass,fov,multicolor_spots_per_feature,possible_BC_count,random_call_probability,seed_x,seed_y,spots_per_feature,target,target_call_observations,target_count_per_feature,target_idx,x,y,z
-0,None,1,1,1,1,1,Endogenous,1,0,1,0.001,125,220,4,Gapdh,4,1,1,12.5,22.0,-1
-1,None,1,1,1,1,1,Endogenous,1,0,1,0.001,130,225,4,Actb,4,1,2,13.0,22.5,-1

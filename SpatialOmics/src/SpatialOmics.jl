@@ -14,9 +14,9 @@ All I/O is available as qualified names only — nothing in tier 2 is exported.
 
 ```julia
 using SpatialOmics          # SpatialDataset, images, points, ds["key"] = el, …
-import SpatialOmics as SO   # SO.load_cosmx, SO.read, SO.write, SO.Zarr, …
+import SpatialOmics as SO   # SO.load, SO.CosMx, SO.read, SO.write, SO.Zarr, …
 
-ds = SO.load_cosmx("/data/run/")
+ds = SO.load(SO.CosMxReader(), "/data/my_experiment/")
 SO.write(ds, "/out/experiment.zarr", SO.Zarr())
 ds2 = SO.read(SO.Zarr(), "/out/experiment.zarr")
 ```
@@ -61,13 +61,13 @@ export CoordinateSystem, Transformation,
 import SpatialOmicsBase:
     SpatialExtent,
     SpatialElementView, SpatialDatasetView,
-    extent, intersects,
+    extent, intersects, crop,
     region, region_key, instance_key,
     ImagePyramidSampler
 
 export SpatialExtent,
        SpatialElementView, SpatialDatasetView,
-       extent, intersects,
+       extent, intersects, crop,
        region, region_key, instance_key,
        ImagePyramidSampler
 
@@ -80,13 +80,13 @@ public filter
 import SpatialIO:
     PlatformReader,
     XeniumReader, VisiumReader, CosMxReader, MerfishReader,
-    validate_path, read_data, load_spatial_data,
-    load_xenium, load_visium, load_cosmx, load_merfish
+    validate_path, read_data, load_spatial_data, load,
+    load_xenium, load_visium, load_merfish
 
 public PlatformReader
 public XeniumReader, VisiumReader, CosMxReader, MerfishReader
-public validate_path, read_data, load_spatial_data
-public load_xenium, load_visium, load_cosmx, load_merfish
+public validate_path, read_data, load_spatial_data, load
+public load_xenium, load_visium, load_merfish
 
 # ── Tier 2 — I/O format tokens (unexported/public) ───────────────────────────
 import SpatialIO:

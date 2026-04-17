@@ -11,7 +11,7 @@ ds = SO.read(SO.Zarr(), "/path/to/experiment.zarr")
 
 # Platform-specific loaders (un-exported; use SO.* prefix)
 xen = SO.load_xenium("/path/to/xenium_output/")
-cos = SO.load_cosmx("/path/to/cosmx_flatfiles/")
+cos = SO.load(SO.CosMxReader(), "/path/to/cosmx_export/")
 
 # Round-trip back to SpatialData OME-ZARR
 SO.write(ds, "/path/to/output.zarr", SO.Zarr())
