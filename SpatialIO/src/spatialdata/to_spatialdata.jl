@@ -27,6 +27,7 @@ function to_spatialdata(
     else
         _to_spatialdata_native(ds, zarr_path)
     end
+    return zarr_path
 end
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -36,7 +37,7 @@ end
 # round-trip won't have zarr_attrs).
 _zarr_group_attrs(meta::Dict{String,Any}) =
     let za = get(meta, "zarr_attrs", nothing)
-        za !== nothing && haskey(za, :attributes) ? za.attributes : Dict{String,Any}()
+        za !== nothing && haskey(za, "attributes") ? za["attributes"] : Dict{String,Any}()
     end
 
 # ─── Native writer ────────────────────────────────────────────────────────────
@@ -257,12 +258,12 @@ end
 function _write_string_array_meta(path::String)
     # Patch attributes onto existing zarr.json for string-array encoding
     meta_path = joinpath(path, "zarr.json")
-    meta = JSON3.read(Base.read(meta_path, String), Dict)
+    meta = JSON.parse(Base.read(meta_path, String))
     meta["attributes"] = Dict{String,Any}(
         "encoding-type"    => "string-array",
         "encoding-version" => "0.2.0",
     )
-    Base.write(meta_path, JSON3.write(meta))
+    Base.write(meta_path, JSON.json(meta))
 end
 
 # ─── CSR matrix writer ────────────────────────────────────────────────────────

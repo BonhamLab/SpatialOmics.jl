@@ -445,12 +445,62 @@ end
 function Base.show(io::IO, v::SpatialDatasetView{T}) where T
     ds  = getfield(v, :dataset)
     ext = getfield(v, :extent)
-    ni = length(ds.images); np = length(ds.points)
-    ns = length(ds.shapes); nl = length(ds.labels)
-    xr = "x=[$(round(ext.xmin,digits=1)), $(round(ext.xmax,digits=1))]"
-    yr = "y=[$(round(ext.ymin,digits=1)), $(round(ext.ymax,digits=1))]"
-    print(io, "SpatialDatasetView{$T}($xr, $yr, ",
-          "$ni image(s), $np point(s), $ns shape(s), $nl label(s))")
+    xr  = "x=[$(round(ext.xmin,digits=1)), $(round(ext.xmax,digits=1))]"
+    yr  = "y=[$(round(ext.ymin,digits=1)), $(round(ext.ymax,digits=1))]"
+    println(io, "SpatialDatasetView{$T}  $xr  $yr")
+    _show_element_section(io, "images", ds.images, _summary_image)
+    _show_element_section(io, "labels", ds.labels, _summary_labels)
+    _show_element_section(io, "points", ds.points, _summary_points)
+    _show_element_section(io, "shapes", ds.shapes, _summary_shapes)
+    _show_element_section(io, "tables", ds.tables, _summary_table)
+end
+
+"""
+    add_roi!(ds, name, ext::SpatialExtent) -> ds
+    add_roi!(ds, name, poly::GeometryBasics.Polygon) -> ds
+
+Store a named ROI as a `SpatialShapes` entry in `ds.shapes[name]`.
+
+The features DataFrame always contains `xmin`, `xmax`, `ymin`, `ymax`,
+`x_centroid`, `y_centroid` columns so that `extent(ds.shapes[name], 1)`
+works via the fast bbox path without decoding the geometry.
+
+```julia
+add_roi!(ds, "tumor",    SpatialExtent(xmin, xmax, ymin, ymax))
+add_roi!(ds, "irregular", GeometryBasics.Polygon([...]))
+view(ds, extent(ds.shapes["tumor"], 1))
+```
+"""
+function add_roi!(ds::SpatialDataset, name::String, ext::SpatialExtent)
+    poly = GeometryBasics.Polygon([
+        GeometryBasics.Point2f(ext.xmin, ext.ymin),
+        GeometryBasics.Point2f(ext.xmax, ext.ymin),
+        GeometryBasics.Point2f(ext.xmax, ext.ymax),
+        GeometryBasics.Point2f(ext.xmin, ext.ymax),
+        GeometryBasics.Point2f(ext.xmin, ext.ymin),
+    ])
+    _roi_shapes!(ds, name, poly, ext.xmin, ext.xmax, ext.ymin, ext.ymax)
+end
+
+function add_roi!(ds::SpatialDataset, name::String, poly::GeometryBasics.Polygon)
+    coords = GeometryBasics.coordinates(poly)
+    xs = [Float64(c[1]) for c in coords]
+    ys = [Float64(c[2]) for c in coords]
+    _roi_shapes!(ds, name, poly, minimum(xs), maximum(xs), minimum(ys), maximum(ys))
+end
+
+function _roi_shapes!(ds, name, poly, xmn, xmx, ymn, ymx)
+    feats = DataFrame(
+        name       = [name],
+        xmin       = [Float32(xmn)],
+        xmax       = [Float32(xmx)],
+        ymin       = [Float32(ymn)],
+        ymax       = [Float32(ymx)],
+        x_centroid = [Float32((xmn + xmx) / 2)],
+        y_centroid = [Float32((ymn + ymx) / 2)],
+    )
+    ds.shapes[name] = SpatialShapes([poly], feats, Dict{String,Any}())
+    return ds
 end
 
 # ---------------------------------------------------------------------------

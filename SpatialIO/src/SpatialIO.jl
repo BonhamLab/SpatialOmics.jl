@@ -29,7 +29,7 @@ using HDF5
 using Arrow
 using CSV
 using Parquet2
-using JSON3
+using JSON
 using CodecZstd
 using DiskArrays
 using SparseArrays

@@ -38,7 +38,7 @@
 #       metadata (string attr)   JSON
 
 using HDF5
-using JSON3
+using JSON
 using SparseArrays
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ write_hdf5(ds, "my_dataset.h5")
 """
 function write_hdf5(ds::SpatialDataset, path::String)
     HDF5.h5open(path, "w") do fid
-        HDF5.write_attribute(fid, "metadata", JSON3.write(ds.metadata))
+        HDF5.write_attribute(fid, "metadata", JSON.json(ds.metadata))
 
         # ── images ────────────────────────────────────────────────────────────
         if !isempty(ds.images)
@@ -70,8 +70,8 @@ function write_hdf5(ds::SpatialDataset, path::String)
                 axes_names = [String(k) for k in keys(img.axes)]
                 axes_units = [String(v) for v in values(img.axes)]
                 HDF5.write_attribute(g, "axes",
-                    JSON3.write(Dict("names" => axes_names, "units" => axes_units)))
-                HDF5.write_attribute(g, "metadata", JSON3.write(img.metadata))
+                    JSON.json(Dict("names" => axes_names, "units" => axes_units)))
+                HDF5.write_attribute(g, "metadata", JSON.json(img.metadata))
             end
         end
 
@@ -81,7 +81,7 @@ function write_hdf5(ds::SpatialDataset, path::String)
             for (name, lbl) in ds.labels
                 g = HDF5.create_group(lg, name)
                 g["data"] = collect(lbl.data)
-                HDF5.write_attribute(g, "metadata", JSON3.write(lbl.metadata))
+                HDF5.write_attribute(g, "metadata", JSON.json(lbl.metadata))
             end
         end
 
@@ -99,9 +99,9 @@ function write_hdf5(ds::SpatialDataset, path::String)
                 coord_cols = haskey(pts.metadata, "coord_cols") ?
                              pts.metadata["coord_cols"] : ["x", "y"]
                 HDF5.write_attribute(g, "coord_cols",
-                    JSON3.write(collect(String, coord_cols)))
-                HDF5.write_attribute(g, "feat_cols",  JSON3.write(feat_cols))
-                HDF5.write_attribute(g, "metadata",   JSON3.write(pts.metadata))
+                    JSON.json(collect(String, coord_cols)))
+                HDF5.write_attribute(g, "feat_cols",  JSON.json(feat_cols))
+                HDF5.write_attribute(g, "metadata",   JSON.json(pts.metadata))
             end
         end
 
@@ -115,8 +115,8 @@ function write_hdf5(ds::SpatialDataset, path::String)
                 for col in feat_cols
                     _hdf5_write_column(fg, col, shp.features[!, col])
                 end
-                HDF5.write_attribute(g, "feat_cols", JSON3.write(feat_cols))
-                HDF5.write_attribute(g, "metadata",  JSON3.write(shp.metadata))
+                HDF5.write_attribute(g, "feat_cols", JSON.json(feat_cols))
+                HDF5.write_attribute(g, "metadata",  JSON.json(shp.metadata))
             end
         end
 
@@ -128,7 +128,7 @@ function write_hdf5(ds::SpatialDataset, path::String)
                 _hdf5_write_csc(g, tbl.data)
                 _hdf5_write_dataframe(g, "obs", tbl.obs, "obs_cols")
                 _hdf5_write_dataframe(g, "var", tbl.var, "var_cols")
-                HDF5.write_attribute(g, "metadata", JSON3.write(tbl.metadata))
+                HDF5.write_attribute(g, "metadata", JSON.json(tbl.metadata))
             end
         end
     end
@@ -150,7 +150,7 @@ function read_hdf5(path::String)::SpatialDataset
     HDF5.h5open(path, "r") do fid
         meta_str = HDF5.haskey(HDF5.attributes(fid), "metadata") ?
             HDF5.read_attribute(fid, "metadata") : "{}"
-        meta = JSON3.read(meta_str, Dict{String,Any})
+        meta = Dict{String,Any}(JSON.parse(meta_str))
         ds   = spatial_dataset(; metadata = meta)
 
         # ── images ────────────────────────────────────────────────────────────
@@ -160,7 +160,7 @@ function read_hdf5(path::String)::SpatialDataset
                 data = Base.read(g["data"])
                 axes_str = HDF5.haskey(HDF5.attributes(g), "axes") ?
                     HDF5.read_attribute(g, "axes") : "{}"
-                axes_d = JSON3.read(axes_str, Dict{String,Any})
+                axes_d = JSON.parse(axes_str)
                 ax_names = get(axes_d, "names", String[])
                 ax_units = get(axes_d, "units", String[])
                 ax_nt    = _build_axes_nt(ax_names, ax_units)
@@ -185,7 +185,7 @@ function read_hdf5(path::String)::SpatialDataset
                 g    = fid["points"][name]
                 coords = Matrix{Float32}(Base.read(g["coordinates"]))
                 feat_cols = HDF5.haskey(HDF5.attributes(g), "feat_cols") ?
-                    JSON3.read(HDF5.read_attribute(g, "feat_cols"), Vector{String}) :
+                    Vector{String}(JSON.parse(HDF5.read_attribute(g, "feat_cols"))) :
                     String[]
                 feat_df = DataFrame()
                 if HDF5.haskey(g, "features")
@@ -196,7 +196,7 @@ function read_hdf5(path::String)::SpatialDataset
                     end
                 end
                 coord_cols = HDF5.haskey(HDF5.attributes(g), "coord_cols") ?
-                    JSON3.read(HDF5.read_attribute(g, "coord_cols"), Vector{String}) :
+                    Vector{String}(JSON.parse(HDF5.read_attribute(g, "coord_cols"))) :
                     ["x", "y"]
                 pts_meta = _read_json_attr(g, "metadata")
                 pts_meta["coord_cols"] = coord_cols
@@ -209,7 +209,7 @@ function read_hdf5(path::String)::SpatialDataset
             for name in keys(fid["shapes"])
                 g = fid["shapes"][name]
                 feat_cols = HDF5.haskey(HDF5.attributes(g), "feat_cols") ?
-                    JSON3.read(HDF5.read_attribute(g, "feat_cols"), Vector{String}) :
+                    Vector{String}(JSON.parse(HDF5.read_attribute(g, "feat_cols"))) :
                     String[]
                 feat_df = DataFrame()
                 if HDF5.haskey(g, "features")
@@ -249,14 +249,14 @@ function _hdf5_write_column(grp, col::String, vals::AbstractVector)
         grp[col] = collect(vals)
     else
         # Fallback: JSON-encode heterogeneous columns
-        grp[col] = JSON3.write(collect(vals))
+        grp[col] = JSON.json(collect(vals))
     end
 end
 
 function _hdf5_read_column(dset::HDF5.Dataset)
     val = Base.read(dset)
     # JSON-encoded fallback was written as a scalar string
-    val isa String && return JSON3.read(val, Vector)
+    val isa String && return JSON.parse(val)
     return val
 end
 
@@ -266,7 +266,7 @@ function _hdf5_write_csc(grp::HDF5.Group, X::AbstractMatrix)
     xg["data"]    = Vector{Float32}(M.nzval)
     xg["indices"] = Vector{Int32}(M.rowval .- 1)
     xg["indptr"]  = Vector{Int32}(M.colptr .- 1)
-    HDF5.write_attribute(xg, "shape",  JSON3.write([size(M, 1), size(M, 2)]))
+    HDF5.write_attribute(xg, "shape",  JSON.json([size(M, 1), size(M, 2)]))
     HDF5.write_attribute(xg, "format", "csc")
 end
 
@@ -276,7 +276,7 @@ function _hdf5_read_csc(grp::HDF5.Group)::SparseMatrixCSC
     vals    = Vector{Float32}(Base.read(xg["data"]))
     rowval  = Vector{Int}(Base.read(xg["indices"])) .+ 1   # 0→1-based
     colptr  = Vector{Int}(Base.read(xg["indptr"]))  .+ 1
-    shape   = JSON3.read(HDF5.read_attribute(xg, "shape"), Vector{Int})
+    shape   = Vector{Int}(JSON.parse(HDF5.read_attribute(xg, "shape")))
     return SparseMatrixCSC(shape[1], shape[2], colptr, rowval, vals)
 end
 
@@ -291,7 +291,7 @@ function _hdf5_write_dataframe(
     for col in cols
         _hdf5_write_column(g, col, df[!, col])
     end
-    HDF5.write_attribute(grp, cols_attr, JSON3.write(cols))
+    HDF5.write_attribute(grp, cols_attr, JSON.json(cols))
 end
 
 function _hdf5_read_dataframe(
@@ -302,7 +302,7 @@ function _hdf5_read_dataframe(
     HDF5.haskey(grp, subname) || return DataFrame()
     g    = grp[subname]
     cols = HDF5.haskey(HDF5.attributes(grp), cols_attr) ?
-        JSON3.read(HDF5.read_attribute(grp, cols_attr), Vector{String}) :
+        Vector{String}(JSON.parse(HDF5.read_attribute(grp, cols_attr))) :
         String.(keys(g))
     df   = DataFrame()
     for col in cols
@@ -314,7 +314,7 @@ end
 
 function _read_json_attr(obj, key::String)::Dict{String,Any}
     HDF5.haskey(HDF5.attributes(obj), key) || return Dict{String,Any}()
-    JSON3.read(HDF5.read_attribute(obj, key), Dict{String,Any})
+    Dict{String,Any}(JSON.parse(HDF5.read_attribute(obj, key)))
 end
 
 function _build_axes_nt(names::Vector, units::Vector)

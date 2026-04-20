@@ -9,6 +9,6 @@ Each geometry is serialised as a GeoJSON Feature with properties drawn
 from `shapes.features`.
 """
 function write(shapes::SpatialShapes, path::String, ::GeoJSON)
-    # TODO Phase 1: implement with JSON3.jl
+    # TODO Phase 1: implement with JSON.jl
     error("write GeoJSON: not yet implemented (Phase 1 deliverable)")
 end

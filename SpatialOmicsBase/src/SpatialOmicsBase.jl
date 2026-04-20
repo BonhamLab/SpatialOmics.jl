@@ -32,6 +32,7 @@ export spatial_dataset
 
 export images, labels, points, shapes, tables, metadata
 export channels, channels!
+export add_roi!
 export region, region_key, instance_key
 
 # Coordinate utilities

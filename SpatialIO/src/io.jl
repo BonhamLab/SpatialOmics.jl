@@ -158,7 +158,7 @@ SIO.write(ds, "/out/experiment.zarr", SIO.Zarr())
 ```
 """
 function write(ds::SpatialDataset, path::String, ::Zarr; kwargs...)
-    to_spatialdata(ds, path; kwargs...)
+    return to_spatialdata(ds, path; kwargs...)
 end
 
 """

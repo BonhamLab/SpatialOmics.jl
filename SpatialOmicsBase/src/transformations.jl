@@ -35,6 +35,15 @@ struct AffineTransformation <: Transformation
     output_coordinate_system::String
 end
 
+function Base.show(io::IO, t::IdentityTransformation)
+    print(io, "IdentityTransformation()")
+end
+
+function Base.show(io::IO, t::AffineTransformation)
+    d = size(t.matrix, 1) - 1
+    print(io, "AffineTransformation($(d)D: $(t.input_coordinate_system) → $(t.output_coordinate_system))")
+end
+
 # Stub — implementation lives in transforms/affine.jl
 function transform_coordinates end
 function compose_transformations end

@@ -10,13 +10,13 @@
 # This module is internal to SpatialIO.
 
 using CodecZstd: ZstdDecompressor, ZstdCompressor
-using JSON3
+using JSON
 using DiskArrays
 
 # ─── Metadata helpers ─────────────────────────────────────────────────────────
 
 """Read and parse `zarr.json` from `path`."""
-_zread_meta(path::String) = JSON3.read(Base.read(joinpath(path, "zarr.json"), String))
+_zread_meta(path::String) = JSON.parse(Base.read(joinpath(path, "zarr.json"), String))
 
 """
 List immediate child groups (sub-directories that contain a `zarr.json`)
@@ -64,7 +64,7 @@ end
 
 function _zdecompress(raw::Vector{UInt8}, codecs)::Vector{UInt8}
     for c in codecs
-        String(c.name) == "zstd" && return transcode(ZstdDecompressor, raw)
+        c["name"] == "zstd" && return transcode(ZstdDecompressor, raw)
     end
     return raw
 end
@@ -122,14 +122,14 @@ end
 
 function _zread_array_1d(path::String)
     meta   = _zread_meta(path)
-    shape  = Int.(meta.shape)
+    shape  = Int.(meta["shape"])
     length(shape) == 1 || error("_zread_array_1d: expected 1-D, got shape $shape at $path")
-    codecs = meta.codecs
-    cs     = Int(meta.chunk_grid.configuration.chunk_shape[1])
+    codecs = meta["codecs"]
+    cs     = Int(meta["chunk_grid"]["configuration"]["chunk_shape"][1])
     n      = shape[1]
     n_ch   = cld(n, cs)
 
-    if any(c -> String(c.name) == "vlen-utf8", codecs)
+    if any(c -> c["name"] == "vlen-utf8", codecs)
         result = String[]
         sizehint!(result, n)
         for i in 0:n_ch-1
@@ -142,7 +142,7 @@ function _zread_array_1d(path::String)
         end
         return result
     else
-        T      = _zdtype_to_julia(String(meta.data_type))
+        T      = _zdtype_to_julia(meta["data_type"])
         result = Vector{T}(undef, n)
         for i in 0:n_ch-1
             c_start = i * cs + 1
@@ -164,11 +164,11 @@ end
 
 function _zread_array_nd(path::String)
     meta        = _zread_meta(path)
-    shape       = Int.(meta.shape)
+    shape       = Int.(meta["shape"])
     N           = length(shape)
-    chunk_shape = Int.(meta.chunk_grid.configuration.chunk_shape)
-    codecs      = meta.codecs
-    T           = _zdtype_to_julia(String(meta.data_type))
+    chunk_shape = Int.(meta["chunk_grid"]["configuration"]["chunk_shape"])
+    codecs      = meta["codecs"]
+    T           = _zdtype_to_julia(meta["data_type"])
 
     result = Array{T}(undef, shape...)
     n_chunks = ntuple(i -> cld(shape[i], chunk_shape[i]), N)
@@ -199,21 +199,21 @@ struct ZarrV3Array{T,N} <: DiskArrays.AbstractDiskArray{T,N}
     path        ::String
     shape       ::NTuple{N,Int}
     chunk_shape ::NTuple{N,Int}
-    codecs      ::Any           # JSON3 array of codec objects
+    codecs      ::Any           # parsed JSON array of codec objects
     fill_value  ::T
 end
 
 function ZarrV3Array(path::String)
     meta = _zread_meta(path)
-    String(meta.node_type) == "array" ||
+    meta["node_type"] == "array" ||
         error("ZarrV3Array: not an array node at $path")
-    T  = _zdtype_to_julia(String(meta.data_type))
-    N  = length(meta.shape)
-    shape       = NTuple{N,Int}(Int.(meta.shape))
-    chunk_shape = NTuple{N,Int}(Int.(meta.chunk_grid.configuration.chunk_shape))
-    fv_raw = meta.fill_value
+    T  = _zdtype_to_julia(meta["data_type"])
+    N  = length(meta["shape"])
+    shape       = NTuple{N,Int}(Int.(meta["shape"]))
+    chunk_shape = NTuple{N,Int}(Int.(meta["chunk_grid"]["configuration"]["chunk_shape"]))
+    fv_raw = meta["fill_value"]
     fv     = isa(fv_raw, Number) ? T(fv_raw) : zero(T)
-    return ZarrV3Array{T,N}(path, shape, chunk_shape, meta.codecs, fv)
+    return ZarrV3Array{T,N}(path, shape, chunk_shape, meta["codecs"], fv)
 end
 
 Base.size(a::ZarrV3Array) = a.shape
@@ -296,7 +296,7 @@ function _zwrite_array(
         "attributes"          => Dict{String,Any}(),
         "storage_transformers" => [],
     )
-    Base.write(joinpath(path, "zarr.json"), JSON3.write(meta))
+    Base.write(joinpath(path, "zarr.json"), JSON.json(meta))
 
     # Write chunks
     for chunk_coords in Iterators.product(ntuple(i -> 0:n_chunks[i]-1, N)...)
@@ -343,7 +343,7 @@ function _zwrite_string_array(
         "attributes"          => Dict{String,Any}(),
         "storage_transformers" => [],
     )
-    Base.write(joinpath(path, "zarr.json"), JSON3.write(meta))
+    Base.write(joinpath(path, "zarr.json"), JSON.json(meta))
 
     raw        = _encode_vlen_utf8(strs)
     compressed = _zcompress(raw; level = zstd_level)
@@ -352,24 +352,13 @@ function _zwrite_string_array(
     Base.write(cpath, compressed)
 end
 
-"""Write a group zarr.json with the given attributes (Dict or JSON3.Object)."""
+"""Write a group zarr.json with the given attributes dict."""
 function _zwrite_group(path::String, attrs = Dict{String,Any}())
     mkpath(path)
-    # Convert JSON3.Object → Dict so JSON3.write round-trips cleanly
-    attrs_dict = _to_plain_dict(attrs)
     meta = Dict(
         "zarr_format" => 3,
         "node_type"   => "group",
-        "attributes"  => attrs_dict,
+        "attributes"  => attrs,
     )
-    Base.write(joinpath(path, "zarr.json"), JSON3.write(meta))
+    Base.write(joinpath(path, "zarr.json"), JSON.json(meta))
 end
-
-# Recursively convert JSON3.Object/Array to plain Julia dicts/arrays
-function _to_plain_dict(x::JSON3.Object)
-    Dict{String,Any}(String(k) => _to_plain_dict(v) for (k, v) in x)
-end
-function _to_plain_dict(x::JSON3.Array)
-    [_to_plain_dict(v) for v in x]
-end
-_to_plain_dict(x) = x

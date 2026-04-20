@@ -20,3 +20,9 @@ end
 
 # Convenience constructor for 2-D physical space (micrometres)
 CoordinateSystem(name::String) = CoordinateSystem(name, ["x", "y"], ["µm", "µm"])
+
+function Base.show(io::IO, cs::CoordinateSystem)
+    axes_str  = "[" * join(cs.axes, ", ") * "]"
+    units_str = "[" * join(repr.(cs.units), ", ") * "]"
+    print(io, "CoordinateSystem($(repr(cs.name)), axes=$(axes_str), units=$(units_str))")
+end

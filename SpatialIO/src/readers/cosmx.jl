@@ -33,13 +33,14 @@ Reader for NanoString/Bruker CosMx SMI raw export output.
 
 Fields
 ------
-- `lazy`             : Bool — reserved for future lazy transcript loading (default true)
-- `sample`           : String or nothing — sample name (e.g. "mw_mus_p1_11"); auto-detected if nothing
-- `morphology_dir`   : String or nothing — path to Morphology2D/ directory containing per-FOV TIFs
-- `morphology_channel` : Int — which TIF channel to load (1-based; Morphology2D TIFs are 5-channel)
-- `morphology_zarr`   : String or nothing — path where the morphology zarr store is written.
-                        Defaults to a `morphology_cache.zarr` directory next to `morphology_dir`.
-                        If the zarr already exists it is opened directly (no re-transcoding).
+- `lazy`           : Bool — reserved for future lazy transcript loading (default true)
+- `sample`         : String or nothing — sample name (e.g. "mw_mus_p1_11"); auto-detected if nothing
+- `morphology_dir` : String or nothing — path to Morphology2D/ directory containing per-FOV TIFs.
+                     All channels are transcoded; channel names are read from TIF metadata and stored
+                     in `img.metadata["channel_names"]`.
+- `morphology_zarr` : String or nothing — path where the morphology zarr store is written.
+                      Defaults to `morphology_cache.zarr` next to `morphology_dir`.
+                      Reopened on subsequent loads; rebuilt automatically if the channel count changes.
 
 # Example
 ```julia
@@ -54,8 +55,15 @@ Base.@kwdef struct CosMxReader <: PlatformReader
     lazy::Bool = true
     sample::Union{Nothing, String} = nothing
     morphology_dir::Union{Nothing, String} = nothing
-    morphology_channel::Int = 1
     morphology_zarr::Union{Nothing, String} = nothing
+end
+
+function Base.show(io::IO, r::CosMxReader)
+    parts = String[]
+    r.sample         !== nothing && push!(parts, "sample=$(repr(r.sample))")
+    r.morphology_dir !== nothing && push!(parts, "morphology_dir=$(repr(r.morphology_dir))")
+    r.morphology_zarr !== nothing && push!(parts, "morphology_zarr=$(repr(r.morphology_zarr))")
+    print(io, "CosMxReader(", join(parts, ", "), ")")
 end
 
 # ─── Path validation ──────────────────────────────────────────────────────────
@@ -250,27 +258,66 @@ end
 # ─── Morphology2D → zarr-backed SpatialImage ─────────────────────────────────
 #
 # Transcodes per-FOV TIF tiles into a single OME-NGFF zarr array on first load.
-# Subsequent loads reopen the existing zarr directly — no re-transcoding.
+# ALL channels are written in one pass; subsequent loads reopen the zarr directly.
 #
-# Array layout: (1, slide_height, slide_width) — OME-NGFF (c, y, x).
-# Chunk layout: one chunk per FOV tile = (1, fov_height, fov_width).
-# Y-flip: TIF row 1 (top of microscopy = highest global y) → last zarr row in
-# the chunk, so zarr y index 0 = slide_ymin (bottom of slide).
+# Array layout: (n_channels, slide_height, slide_width) — OME-NGFF (c, y, x).
+# Chunk shape: (n_channels, fov_h, fov_w).  FOV origins are NOT assumed to be
+# on a multiple-of-fov_w/fov_h grid — each FOV is placed at its exact pixel
+# offset.  A partial FOV tile may therefore span up to four chunk boundaries.
+# The implementation builds a full slide buffer in RAM, fills tiles at their
+# exact positions, then writes chunks in a single pass.
+# Y-flip: TIF row 1 (top of microscopy = highest global y) → last slide row
+# in that FOV's pixel range, so slide row 0 = slide_ymin (bottom of slide).
+#
+# Channel names are parsed from the IMAGEDESCRIPTION JSON in the first TIF IFD
+# and stored in img.metadata["channel_names"].  The cache is invalidated and
+# rebuilt when n_channels changes or the "pixel_exact" flag is absent (caches
+# written by the old chunk-snapping code lack this flag).
+
+"""
+    _parse_channel_names(tif_path) -> Vector{String}
+
+Extract biological target names from the CosMx TIF IMAGEDESCRIPTION JSON.
+Returns e.g. `["PanCK", "CD68", "CD298/B2M", "CD45", "DAPI"]` ordered by
+`ChannelOrder` (BGYRU).  Falls back to `["channel_1", …]` on any parse error.
+"""
+function _parse_channel_names(tif_path::String)::Vector{String}
+    tif = TiffImages.load(tif_path; lazyio = true)
+    n   = ndims(tif) == 3 ? size(tif, 3) : 1
+    fallback = ["channel_$i" for i in 1:n]
+
+    desc = nothing
+    for (tag, val) in first(TiffImages.ifds(tif))
+        if tag == 270      # IMAGEDESCRIPTION
+            desc = val[1].data
+            break
+        end
+    end
+    desc === nothing && return fallback
+
+    meta = try JSON.parse(desc, Dict) catch; return fallback end
+    channel_order = get(meta, "ChannelOrder", nothing)
+    reagents      = get(get(meta, "MorphologyKit", Dict()), "MorphologyReagents", nothing)
+    (channel_order === nothing || reagents === nothing) && return fallback
+
+    id_to_target = Dict{String,String}()
+    for r in reagents
+        flu = get(r, "Fluorophore", nothing)
+        flu === nothing && continue
+        cid = get(flu, "ChannelId", nothing)
+        tgt = get(r, "BiologicalTarget", nothing)
+        (cid !== nothing && tgt !== nothing) && (id_to_target[string(cid)] = string(tgt))
+    end
+
+    return [get(id_to_target, string(c), "channel_$i")
+            for (i, c) in enumerate(channel_order)]
+end
 
 function _write_morphology_zarr(
     zarr_path     ::String,
     morphology_dir::String,
     fov_dict      ::Dict{Int, NamedTuple{(:x,:y),Tuple{Int,Int}}},
-    channel       ::Int,
 )::SpatialImage
-    # Fast path: zarr already built — open directly.
-    if isdir(zarr_path) && isfile(joinpath(zarr_path, "zarr.json"))
-        @info "CosMxReader: reusing cached morphology zarr" zarr_path
-        return _read_sd_image(zarr_path)
-    end
-
-    @info "CosMxReader: transcoding Morphology2D TIFs to zarr" zarr_path channel
-
     # Discover TIF files: *_F<NNNNN>.TIF (case-insensitive)
     fov_paths = Dict{Int, String}()
     for f in readdir(morphology_dir)
@@ -281,10 +328,38 @@ function _write_morphology_zarr(
     isempty(fov_paths) &&
         error("CosMxReader: no TIF files found in $morphology_dir (pattern: *_F<N>.TIF)")
 
-    # FOV dimensions from sample TIF (lazyio avoids loading pixels)
-    sample_path = fov_paths[first(sort(collect(keys(fov_paths))))]
-    sample_tif  = TiffImages.load(sample_path; lazyio = true)
+    # Peek at one TIF to get dimensions and channel count (lazyio = header only)
+    sample_path  = fov_paths[first(sort(collect(keys(fov_paths))))]
+    sample_tif   = TiffImages.load(sample_path; lazyio = true)
     fov_h, fov_w = size(sample_tif, 1), size(sample_tif, 2)
+    n_channels   = ndims(sample_tif) == 3 ? size(sample_tif, 3) : 1
+    channel_names = _parse_channel_names(sample_path)
+
+    # Fast path: reuse existing zarr if channel count matches AND was written
+    # with exact pixel placement (pixel_exact flag in root zarr.json).
+    array_meta_path = joinpath(zarr_path, "0", "zarr.json")
+    root_meta_path  = joinpath(zarr_path, "zarr.json")
+    if isdir(zarr_path) && isfile(array_meta_path)
+        existing     = JSON.parse(Base.read(array_meta_path, String), Dict)
+        root_attrs   = if isfile(root_meta_path)
+            get(JSON.parse(Base.read(root_meta_path, String), Dict), "attributes", Dict())
+        else
+            Dict()
+        end
+        pixel_exact  = get(root_attrs, "pixel_exact", false)
+        if existing["shape"][1] == n_channels && pixel_exact && isdir(joinpath(zarr_path, "1"))
+            @info "CosMxReader: reusing cached morphology zarr" zarr_path
+            return _read_sd_image(zarr_path)
+        elseif existing["shape"][1] != n_channels
+            @info "CosMxReader: channel count changed — rebuilding zarr" zarr_path old=existing["shape"][1] new=n_channels
+            rm(zarr_path; recursive=true)
+        else
+            @info "CosMxReader: rebuilding zarr with exact pixel placement" zarr_path
+            rm(zarr_path; recursive=true)
+        end
+    end
+
+    @info "CosMxReader: transcoding Morphology2D TIFs to zarr" zarr_path n_channels channel_names
 
     # Restrict to FOVs with both a TIF and a known grid position
     fov_ids   = sort(filter(f -> haskey(fov_dict, f), collect(keys(fov_paths))))
@@ -304,20 +379,21 @@ function _write_morphology_zarr(
 
     mkpath(zarr_path)
     _zwrite_group(zarr_path, Dict{String,Any}(
-        "x_range" => [slide_xmin, slide_xmax],
-        "y_range" => [slide_ymin, slide_ymax],
+        "x_range"       => [slide_xmin, slide_xmax],
+        "y_range"       => [slide_ymin, slide_ymax],
+        "channel_names" => channel_names,
+        "pixel_exact"   => true,
     ))
 
     array_path  = joinpath(zarr_path, "0")
-    chunk_shape = (1, fov_h, fov_w)
     mkpath(joinpath(array_path, "c"))
-    Base.write(joinpath(array_path, "zarr.json"), JSON3.write(Dict(
+    Base.write(joinpath(array_path, "zarr.json"), JSON.json(Dict(
         "zarr_format"  => 3,
         "node_type"    => "array",
-        "shape"        => [1, slide_height, slide_width],
+        "shape"        => [n_channels, slide_height, slide_width],
         "data_type"    => "float32",
         "chunk_grid"   => Dict("name" => "regular",
-                               "configuration" => Dict("chunk_shape" => collect(chunk_shape))),
+                               "configuration" => Dict("chunk_shape" => [1, fov_h, fov_w])),
         "chunk_key_encoding" => Dict("name" => "default",
                                      "configuration" => Dict("separator" => "/")),
         "fill_value"   => 0,
@@ -329,22 +405,103 @@ function _write_morphology_zarr(
         "storage_transformers" => [],
     )))
 
-    for (fi, fov_id) in enumerate(fov_ids)
-        xo = x_origins[fi]
-        yo = y_origins[fi]
-        chunk_x = div(xo - slide_xmin, fov_w)
-        chunk_y = div(yo - fov_h + 1 - slide_ymin, fov_h)
+    # Level-1: coarse pyramid level for zoom-out display via ImagePyramidSampler.
+    # Without a pyramid the heatmap path falls back to strided zarr reads over the
+    # full ~100k×90k slide, which either OOMs or returns zeros.
+    ds         = 32
+    l1_h       = cld(fov_h, ds)
+    l1_w       = cld(fov_w, ds)
+    l1_slide_h = cld(slide_height, ds)
+    l1_slide_w = cld(slide_width,  ds)
+    level1_path = joinpath(zarr_path, "1")
+    mkpath(joinpath(level1_path, "c"))
+    Base.write(joinpath(level1_path, "zarr.json"), JSON.json(Dict(
+        "zarr_format"  => 3,
+        "node_type"    => "array",
+        "shape"        => [n_channels, l1_slide_h, l1_slide_w],
+        "data_type"    => "float32",
+        "chunk_grid"   => Dict("name" => "regular",
+                               "configuration" => Dict("chunk_shape" => [1, l1_h, l1_w])),
+        "chunk_key_encoding" => Dict("name" => "default",
+                                     "configuration" => Dict("separator" => "/")),
+        "fill_value"   => 0,
+        "codecs"       => [
+            Dict("name" => "bytes", "configuration" => Dict("endian" => "little")),
+            Dict("name" => "zstd",  "configuration" => Dict("level" => 0, "checksum" => false)),
+        ],
+        "attributes"   => Dict{String,Any}(),
+        "storage_transformers" => [],
+    )))
 
-        tif = TiffImages.load(fov_paths[fov_id]; lazyio = true)
-        raw = ndims(tif) == 3 ? tif[:, :, channel] : tif[:, :]
-        tile_flip = reverse(Float32.(raw); dims = 1)   # y-flip: TIF top → zarr bottom
-        tile_3d   = reshape(tile_flip, 1, fov_h, fov_w)
-        raw_bytes = reinterpret(UInt8, vec(permutedims(tile_3d, (3, 2, 1))))
-        compressed = _zcompress(collect(raw_bytes))
+    # ── Precompute FOV pixel ranges (0-based slide coordinates) ──────────────
+    n_fovs  = length(fov_ids)
+    fov_r1s = [y_origins[fi] - fov_h + 1 - slide_ymin for fi in 1:n_fovs]
+    fov_r2s = [y_origins[fi]             - slide_ymin for fi in 1:n_fovs]
+    fov_c1s = [x_origins[fi]             - slide_xmin for fi in 1:n_fovs]
+    fov_c2s = [x_origins[fi] + fov_w - 1 - slide_xmin for fi in 1:n_fovs]
 
-        cpath = _chunk_path(array_path, (0, chunk_y, chunk_x))
-        mkpath(dirname(cpath))
-        Base.write(cpath, compressed)
+    n_cy = cld(slide_height, fov_h)
+    n_cx = cld(slide_width,  fov_w)
+
+    # ── Write one (channel, cy, cx) block at a time ───────────────────────────
+    # Chunk shape (1, fov_h, fov_w): one zarr chunk per channel per spatial tile.
+    # Peak memory per iteration: one 2-D float32 tile (~69 MB) + one TIF channel
+    # materialised (~72 MB) — vs the previous (n_channels × fov_h × fov_w) buffer
+    # that consumed ~345 MB.  The same TIF is loaded n_channels times per overlapping
+    # FOV; subsequent loads hit the OS page cache so I/O cost is low.
+
+    for cy in 0:(n_cy - 1), cx in 0:(n_cx - 1)
+        # Chunk pixel range in slide (0-based, inclusive)
+        cr1 = cy * fov_h;  cr2 = min(cr1 + fov_h - 1, slide_height - 1)
+        cc1 = cx * fov_w;  cc2 = min(cc1 + fov_w - 1, slide_width  - 1)
+
+        # Collect overlapping FOV indices
+        overlapping = Int[]
+        for fi in 1:n_fovs
+            (fov_r1s[fi] <= cr2 && fov_r2s[fi] >= cr1 &&
+             fov_c1s[fi] <= cc2 && fov_c2s[fi] >= cc1) && push!(overlapping, fi)
+        end
+        isempty(overlapping) && continue   # no file written; zarr fill_value = 0
+
+        # Precompute src/dst index ranges once (independent of channel)
+        fov_coords = [
+            let ir1 = max(fov_r1s[fi], cr1), ir2 = min(fov_r2s[fi], cr2),
+                ic1 = max(fov_c1s[fi], cc1), ic2 = min(fov_c2s[fi], cc2)
+                (dst_r1 = ir1-cr1+1,          dst_r2 = ir2-cr1+1,
+                 dst_c1 = ic1-cc1+1,          dst_c2 = ic2-cc1+1,
+                 src_r1 = ir1-fov_r1s[fi]+1,  src_r2 = ir2-fov_r1s[fi]+1,
+                 src_c1 = ic1-fov_c1s[fi]+1,  src_c2 = ic2-fov_c1s[fi]+1)
+            end
+            for fi in overlapping]
+
+        for c in 1:n_channels
+            chunk_c = zeros(Float32, fov_h, fov_w)
+
+            for (fi, coord) in zip(overlapping, fov_coords)
+                tif     = TiffImages.load(fov_paths[fov_ids[fi]]; lazyio = true)
+                raw     = ndims(tif) == 3 ? tif[:, :, c] : tif[:, :]
+                flipped = reverse(Float32.(raw); dims = 1)   # y-flip
+                chunk_c[coord.dst_r1:coord.dst_r2, coord.dst_c1:coord.dst_c2] .=
+                    flipped[coord.src_r1:coord.src_r2, coord.src_c1:coord.src_c2]
+            end
+
+            # Write level-0 chunk (channel c-1, spatial tile cy,cx)
+            buf0       = reshape(chunk_c, 1, fov_h, fov_w)
+            raw_bytes0 = reinterpret(UInt8, vec(permutedims(buf0, (3, 2, 1))))
+            cpath0     = _chunk_path(array_path, (c-1, cy, cx))
+            mkpath(dirname(cpath0))
+            Base.write(cpath0, _zcompress(collect(raw_bytes0)))
+
+            # Write level-1 chunk (ds× spatial subsampling)
+            l1_raw = chunk_c[1:ds:end, 1:ds:end]
+            rh, rw = size(l1_raw)
+            buf1   = zeros(Float32, 1, l1_h, l1_w)
+            buf1[1, 1:rh, 1:rw] .= l1_raw
+            raw_bytes1 = reinterpret(UInt8, vec(permutedims(buf1, (3, 2, 1))))
+            cpath1     = _chunk_path(level1_path, (c-1, cy, cx))
+            mkpath(dirname(cpath1))
+            Base.write(cpath1, _zcompress(collect(raw_bytes1)))
+        end
     end
 
     return _read_sd_image(zarr_path)
@@ -383,9 +540,9 @@ function read_data(reader::CosMxReader, path::String)::SpatialDataset
     if reader.morphology_dir !== nothing
         zarr_path = something(reader.morphology_zarr,
                               abspath(joinpath(reader.morphology_dir, "..", "morphology_cache.zarr")))
-        img = _write_morphology_zarr(zarr_path, reader.morphology_dir, fov_dict, reader.morphology_channel)
+        img = _write_morphology_zarr(zarr_path, reader.morphology_dir, fov_dict)
         ds["morphology"] = img
-        # chunk shape is (c=1, y=fov_h, x=fov_w) — one chunk per FOV tile
+        # chunk shape is (n_channels, fov_h, fov_w) — one chunk per FOV tile
         fov_h, fov_w = img.data.chunk_shape[2], img.data.chunk_shape[3]
         ds["fovs"] = _build_fov_shapes(fov_dict, fov_h, fov_w)
     end

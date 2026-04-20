@@ -38,7 +38,7 @@ const COSMX_MOCK  = joinpath(@__DIR__, "fixtures", "cosmx_mock")
         @test cr.lazy == true
         @test isnothing(cr.sample)
         @test isnothing(cr.morphology_dir)
-        @test cr.morphology_channel == 1
+        @test isnothing(cr.morphology_zarr)
 
         mr = MerfishReader()
         @test mr.lazy == true

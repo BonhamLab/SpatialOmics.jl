@@ -120,12 +120,13 @@ function _read_sd_image(path::String)::SpatialImage
     end
 
     # Parse axes from NGFF multiscales metadata
-    axes_meta = if haskey(meta, :attributes) &&
-                   haskey(meta.attributes, :ome) &&
-                   haskey(meta.attributes.ome, :multiscales) &&
-                   !isempty(meta.attributes.ome.multiscales) &&
-                   haskey(meta.attributes.ome.multiscales[1], :axes)
-        meta.attributes.ome.multiscales[1].axes
+    attrs_meta = get(meta, "attributes", nothing)
+    axes_meta = if attrs_meta !== nothing &&
+                   haskey(attrs_meta, "ome") &&
+                   haskey(attrs_meta["ome"], "multiscales") &&
+                   !isempty(attrs_meta["ome"]["multiscales"]) &&
+                   haskey(attrs_meta["ome"]["multiscales"][1], "axes")
+        attrs_meta["ome"]["multiscales"][1]["axes"]
     else
         nothing
     end
@@ -137,14 +138,19 @@ function _read_sd_image(path::String)::SpatialImage
     _apply_ngff_transform!(img_meta, meta, size(arr))
 
     # Fallback: if _apply_ngff_transform! found no transform, check for explicit
-    # x_range/y_range attributes written by _write_sd_image_tiles.
+    # x_range/y_range attributes written by CosMxReader.
     if !haskey(img_meta, "x_range") &&
-       haskey(meta, :attributes) &&
-       haskey(meta.attributes, :x_range) && haskey(meta.attributes, :y_range)
-        xr = meta.attributes.x_range
-        yr = meta.attributes.y_range
+       attrs_meta !== nothing &&
+       haskey(attrs_meta, "x_range") && haskey(attrs_meta, "y_range")
+        xr = attrs_meta["x_range"]
+        yr = attrs_meta["y_range"]
         img_meta["x_range"] = (Float64(xr[1]), Float64(xr[2]))
         img_meta["y_range"] = (Float64(yr[1]), Float64(yr[2]))
+    end
+
+    # Propagate channel_names written by CosMxReader.
+    if attrs_meta !== nothing && haskey(attrs_meta, "channel_names")
+        img_meta["channel_names"] = Vector{String}(attrs_meta["channel_names"])
     end
 
     return SpatialImage(arr, pyramid, ax_nt, img_meta)
@@ -154,12 +160,12 @@ end
 
 # Walk the standard NGFF multiscales metadata path (ome.multiscales or multiscales).
 function _get_multiscales_meta(meta)
-    haskey(meta, :attributes) || return nothing
-    a = meta.attributes
-    if haskey(a, :ome) && haskey(a.ome, :multiscales) && !isempty(a.ome.multiscales)
-        return a.ome.multiscales[1]
-    elseif haskey(a, :multiscales) && !isempty(a.multiscales)
-        return a.multiscales[1]
+    haskey(meta, "attributes") || return nothing
+    a = meta["attributes"]
+    if haskey(a, "ome") && haskey(a["ome"], "multiscales") && !isempty(a["ome"]["multiscales"])
+        return a["ome"]["multiscales"][1]
+    elseif haskey(a, "multiscales") && !isempty(a["multiscales"])
+        return a["multiscales"][1]
     end
     return nothing
 end
@@ -167,23 +173,23 @@ end
 # Parse the first top-level coordinateTransformations entry.
 # Returns (type, data, in_axes, out_axes) or nothing.
 function _parse_top_transform(ms)
-    haskey(ms, :coordinateTransformations) || return nothing
-    ct = ms.coordinateTransformations
+    haskey(ms, "coordinateTransformations") || return nothing
+    ct = ms["coordinateTransformations"]
     isempty(ct) && return nothing
     t      = ct[1]
-    ttype  = String(t.type)
-    in_ax  = haskey(t, :input)  ? [String(a.name) for a in t.input.axes]  : nothing
-    out_ax = haskey(t, :output) ? [String(a.name) for a in t.output.axes] : nothing
+    ttype  = t["type"]
+    in_ax  = haskey(t, "input")  ? [a["name"] for a in t["input"]["axes"]]  : nothing
+    out_ax = haskey(t, "output") ? [a["name"] for a in t["output"]["axes"]] : nothing
     if ttype == "identity"
         return ("identity", nothing, in_ax, out_ax)
     elseif ttype == "scale"
-        return ("scale", Float64.(t.scale), in_ax, out_ax)
+        return ("scale", Float64.(t["scale"]), in_ax, out_ax)
     elseif ttype == "affine"
-        n_rows = length(t.affine)
-        n_cols = length(t.affine[1])
+        n_rows = length(t["affine"])
+        n_cols = length(t["affine"][1])
         A = Matrix{Float64}(undef, n_rows, n_cols)
         for i in 1:n_rows, j in 1:n_cols
-            A[i, j] = Float64(t.affine[i][j])
+            A[i, j] = Float64(t["affine"][i][j])
         end
         return ("affine", A, in_ax, out_ax)
     else
@@ -305,8 +311,8 @@ function _read_sd_points(path::String)::SpatialPoints
 
     # Determine coordinate columns from metadata (default: x, y)
     all_cols = names(features_df)
-    axes = haskey(meta, :attributes) && haskey(meta.attributes, :axes) ?
-           String.(meta.attributes.axes) : ["x", "y"]
+    axes = haskey(meta, "attributes") && haskey(meta["attributes"], "axes") ?
+           String.(meta["attributes"]["axes"]) : ["x", "y"]
     coord_cols = [a for a in axes if a in all_cols]
     isempty(coord_cols) && (coord_cols = ["x", "y"])
 
@@ -342,14 +348,14 @@ end
 
 function _parse_element_scale(meta, n_spatial::Int=2)::Vector{Float64}
     ones_out = ones(Float64, n_spatial)
-    haskey(meta, :attributes) || return ones_out
-    attrs = meta.attributes
-    haskey(attrs, :coordinateTransformations) || return ones_out
-    ct = attrs.coordinateTransformations
+    haskey(meta, "attributes") || return ones_out
+    attrs = meta["attributes"]
+    haskey(attrs, "coordinateTransformations") || return ones_out
+    ct = attrs["coordinateTransformations"]
     isempty(ct) && return ones_out
     t = ct[1]
-    String(t.type) == "scale" || return ones_out
-    raw = Float64.(t.scale)
+    t["type"] == "scale" || return ones_out
+    raw = Float64.(t["scale"])
     # Return the first n_spatial values.
     length(raw) >= n_spatial || return ones_out
     return raw[1:n_spatial]
@@ -505,7 +511,7 @@ function _read_anndata_dataframe(path::String)::DataFrame
     isdir(path) || return DataFrame()
     meta = _zread_meta(path)
 
-    attrs     = haskey(meta, :attributes) ? meta.attributes : nothing
+    attrs     = haskey(meta, "attributes") ? meta["attributes"] : nothing
     col_order = attrs !== nothing && haskey(attrs, "column-order") ?
                 String.(attrs["column-order"]) : String[]
     index_col = attrs !== nothing && haskey(attrs, "_index") ?
@@ -538,10 +544,10 @@ and categorical columns (group with categories/ + codes/ sub-arrays).
 function _zread_column(col_path::String)
     col_meta = _zread_meta(col_path)
 
-    if String(col_meta.node_type) == "array"
+    if col_meta["node_type"] == "array"
         return _zread_array_1d(col_path)
 
-    elseif String(col_meta.node_type) == "group"
+    elseif col_meta["node_type"] == "group"
         # Categorical: has categories/ and codes/ sub-arrays
         cats_path  = joinpath(col_path, "categories")
         codes_path = joinpath(col_path, "codes")
@@ -562,9 +568,9 @@ function _read_csr_matrix(path::String)::SparseMatrixCSC
     isdir(path) || error("_read_csr_matrix: missing group $path")
     meta = _zread_meta(path)
 
-    haskey(meta, :attributes) && haskey(meta.attributes, :shape) ||
+    haskey(meta, "attributes") && haskey(meta["attributes"], "shape") ||
         error("_read_csr_matrix: no shape in $path")
-    shape = Int.(meta.attributes.shape)
+    shape = Int.(meta["attributes"]["shape"])
     n_obs, n_genes = shape[1], shape[2]
 
     data_vals = Float32.(_zread_array_1d(joinpath(path, "data")))
@@ -641,8 +647,8 @@ end
 
 function _axes_namedtuple(axes_meta)
     axes_meta === nothing && return NamedTuple()
-    names_vec  = [Symbol(String(a.name)) for a in axes_meta]
-    units_vec  = [haskey(a, :unit) ? String(a.unit) : "" for a in axes_meta]
+    names_vec  = [Symbol(a["name"]) for a in axes_meta]
+    units_vec  = [haskey(a, "unit") ? String(a["unit"]) : "" for a in axes_meta]
     vals       = Tuple(units_vec)
     return NamedTuple{Tuple(names_vec)}(vals)
 end

@@ -39,11 +39,13 @@ export SpatialDataset,
 import SpatialOmicsBase:
     spatial_dataset,
     images, labels, points, shapes, tables, metadata,
-    channels, channels!
+    channels, channels!,
+    add_roi!
 
 export spatial_dataset,
        images, labels, points, shapes, tables, metadata,
-       channels, channels!
+       channels, channels!,
+       add_roi!
 
 # ── Coordinate systems and transformations (exported) ─────────────────────────
 
