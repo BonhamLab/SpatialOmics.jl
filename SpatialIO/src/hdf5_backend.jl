@@ -109,13 +109,14 @@ function write_hdf5(ds::SpatialDataset, path::String)
         if !isempty(ds.shapes)
             sg = HDF5.create_group(fid, "shapes")
             for (name, shp) in ds.shapes
-                g  = HDF5.create_group(sg, name)
-                fg = HDF5.create_group(g, "features")
-                feat_cols = names(shp.features)
-                for col in feat_cols
-                    _hdf5_write_column(fg, col, shp.features[!, col])
+                g      = HDF5.create_group(sg, name)
+                fg     = HDF5.create_group(g, "features")
+                cols   = Tables.columns(shp)
+                fnames = String.(keys(cols))
+                for (fname, fvals) in pairs(cols)
+                    _hdf5_write_column(fg, String(fname), collect(fvals))
                 end
-                HDF5.write_attribute(g, "feat_cols", JSON.json(feat_cols))
+                HDF5.write_attribute(g, "feat_cols", JSON.json(fnames))
                 HDF5.write_attribute(g, "metadata",  JSON.json(shp.metadata))
             end
         end
@@ -220,7 +221,8 @@ function read_hdf5(path::String)::SpatialDataset
                     end
                 end
                 shp_meta = _read_json_attr(g, "metadata")
-                ds[name] = SpatialShapes(Any[], feat_df, shp_meta)
+                n = nrow(feat_df)
+                ds[name] = SpatialShapes(fill(nothing, n), feat_df, shp_meta)
             end
         end
 

@@ -161,33 +161,17 @@ function _read_polygons(path::String)
                        types  = Dict("fov" => Int32, "cellID" => Int32,
                                      "x_global_px" => Float64, "y_global_px" => Float64))
 
-    grouped    = groupby(poly_df, :cell)
-    n_cells    = length(grouped)
-    geometries = Vector{Vector{UInt8}}(undef, n_cells)
-    obs        = DataFrame(cell      = String[],
-                           fov       = Int32[],
-                           cell_ID   = Int32[],
-                           x_centroid = Float64[],
-                           y_centroid = Float64[])
-
-    for (k, (key, grp)) in enumerate(pairs(grouped))
-        xs = grp.x_global_px
-        ys = grp.y_global_px
+    grouped = groupby(poly_df, :cell)
+    shapes  = [begin
+        xs   = grp.x_global_px
+        ys   = grp.y_global_px
         ring = Point2f.(xs, ys)
-        # Ensure ring is closed for WKB (first == last)
-        if ring[1] != ring[end]
-            push!(ring, ring[1])
-        end
-        poly          = GeometryBasics.Polygon(ring)
-        geometries[k] = _encode_wkb_polygon(poly)
-        push!(obs, (cell       = string(key.cell),
-                    fov        = grp.fov[1],
-                    cell_ID    = grp.cellID[1],
-                    x_centroid = mean(xs),
-                    y_centroid = mean(ys)))
-    end
+        ring[1] != ring[end] && push!(ring, ring[1])
+        poly = GeometryBasics.Polygon(ring)
+        SpatialShape(poly, (cell = string(key.cell), cell_ID = grp.cellID[1]))
+    end for (key, grp) in pairs(grouped)]
 
-    return SpatialShapes(geometries, obs, Dict{String,Any}())
+    return SpatialShapes(shapes, Dict{String,Any}())
 end
 
 # ─── Expression matrix + metadata → SpatialTable ─────────────────────────────
@@ -229,30 +213,18 @@ function _build_fov_shapes(
     fov_w::Int,
 )::SpatialShapes
     fov_ids = sort(collect(keys(fov_dict)))
-    geoms   = Vector{Any}(undef, length(fov_ids))
-    obs     = DataFrame(
-        fov_id     = Int32[],
-        xmin       = Float64[],
-        xmax       = Float64[],
-        ymin       = Float64[],
-        ymax       = Float64[],
-        x_centroid = Float64[],
-        y_centroid = Float64[],
-    )
-    for (k, fov_id) in enumerate(fov_ids)
+    shapes  = [begin
         pos  = fov_dict[fov_id]
         xmin = Float64(pos.x)
         xmax = Float64(pos.x + fov_w - 1)
-        ymax = Float64(pos.y)                # TIF row 1 = highest global y
+        ymax = Float64(pos.y)
         ymin = Float64(pos.y - fov_h + 1)
         ring = GeometryBasics.Point2f[
             (xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax), (xmin, ymin),
         ]
-        geoms[k] = GeometryBasics.Polygon(ring)
-        push!(obs, (Int32(fov_id), xmin, xmax, ymin, ymax,
-                    (xmin + xmax) / 2, (ymin + ymax) / 2))
-    end
-    return SpatialShapes(geoms, obs, Dict{String,Any}())
+        SpatialShape(GeometryBasics.Polygon(ring), (fov_id = Int32(fov_id),))
+    end for fov_id in fov_ids]
+    return SpatialShapes(shapes, Dict{String,Any}())
 end
 
 # ─── Morphology2D → zarr-backed SpatialImage ─────────────────────────────────

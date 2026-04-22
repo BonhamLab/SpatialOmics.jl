@@ -3,6 +3,7 @@ using SpatialAnalysis
 using SpatialOmicsBase
 using DataFrames
 using GeometryBasics
+using Tables
 
 @testset "SpatialAnalysis.jl" begin
 
@@ -86,8 +87,8 @@ using GeometryBasics
         @test s_pts.features.gene == ["A", "B"]
 
         s_shp = SpatialAnalysis.crop(shp, ext)
-        @test length(s_shp.geometries) == 1
-        @test s_shp.features.cell_id == [1]
+        @test length(s_shp.shapes) == 1
+        @test Tables.getcolumn(s_shp, :cell_id) == [1]
     end
 
     @testset "crop — polygon ROI" begin

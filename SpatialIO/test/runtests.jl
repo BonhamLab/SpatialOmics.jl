@@ -83,9 +83,9 @@ const COSMX_MOCK  = joinpath(@__DIR__, "fixtures", "cosmx_mock")
         # Cell boundaries — 2 cells in mock polygons file
         @test haskey(ds.shapes, "cell_boundaries")
         shp = ds.shapes["cell_boundaries"]
-        @test length(shp.geometries) == 2
-        # Geometries are WKB-encoded bytes
-        @test shp.geometries[1] isa Vector{UInt8}
+        @test length(shp.shapes) == 2
+        # Geometries are decoded Polygons
+        @test geometry(shp, 1) isa GeometryBasics.Polygon
 
         # Expression table — 2 cells × 3 genes
         @test haskey(ds.tables, "expression")

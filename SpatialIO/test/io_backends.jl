@@ -7,6 +7,7 @@ using SpatialIO
 using SpatialOmicsBase
 using DataFrames
 using SparseArrays
+using Tables
 
 # ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -29,9 +30,9 @@ function _make_test_dataset()
                            Dict{String,Any}("coord_cols" => ["x", "y"]))
     ds["transcripts"] = pts
 
-    # shapes (feature-only; no WKB geometries needed for HDF5 round-trip)
+    # shapes (no geometry needed for HDF5 round-trip; nothing geometry placeholder)
     shp_feats = DataFrame(cell_id = Int32.(1:5), area = rand(Float32, 5))
-    ds["cell_boundaries"] = SpatialShapes(Any[], shp_feats, Dict{String,Any}())
+    ds["cell_boundaries"] = SpatialShapes(fill(nothing, 5), shp_feats, Dict{String,Any}())
 
     # table
     X   = sparse(rand(Float32, 10, 50))
@@ -83,8 +84,9 @@ end
         @testset "shapes" begin
             @test haskey(ds2.shapes, "cell_boundaries")
             shp_rt = ds2.shapes["cell_boundaries"]
-            @test nrow(shp_rt.features) == 5
-            @test shp_rt.features.cell_id == ds.shapes["cell_boundaries"].features.cell_id
+            @test length(shp_rt.shapes) == 5
+            @test Tables.getcolumn(shp_rt, :cell_id) ==
+                  Tables.getcolumn(ds.shapes["cell_boundaries"], :cell_id)
         end
 
         @testset "tables" begin

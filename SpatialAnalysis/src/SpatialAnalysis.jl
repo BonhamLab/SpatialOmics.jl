@@ -42,8 +42,7 @@ include("statistics/SpatialStatistics.jl")
 export filter_spots, detect_artifacts, spatially_aware_qc
 
 # Preprocessing
-export normalize_counts, correct_batch_effects, impute_missing
-export crop
+export normalize_counts, correct_batch_effects, impute_missing, crop
 
 # Statistics (owned by SpatialAnalysis directly)
 export spatial_autocorrelation, hotspot_detection, spatial_clustering

@@ -24,6 +24,6 @@ Convert a `SpatialShapes` to poly arguments. Accepts `Polygon` and `Circle`
 geometries; `nothing` entries (failed WKB decodes) are silently dropped.
 """
 function Makie.convert_arguments(P::Type{<:Poly}, shp::SpatialShapes)
-    geoms = _SpatialGeom[g for g in shp.geometries if g isa _SpatialGeom]
+    geoms = _SpatialGeom[s.geometry for s in shp.shapes if s.geometry isa _SpatialGeom]
     return Makie.convert_arguments(P, geoms)
 end

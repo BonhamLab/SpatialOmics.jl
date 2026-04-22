@@ -37,8 +37,8 @@ not zero).
 Returns a `Vector{Float64}` aligned to the rows of `from`.
 """
 function distances(from::SpatialPoints, to::SpatialShapes; signed::Bool=false)
-    n_pts = size(from.coordinates, 1)
-    n_shapes = length(to.geometries)
+    n_pts    = size(from.coordinates, 1)
+    n_shapes = length(to.shapes)
     n_shapes == 0 && return fill(Inf, n_pts)
 
     tree, cx, cy = _centroid_tree(to)
@@ -48,35 +48,26 @@ function distances(from::SpatialPoints, to::SpatialShapes; signed::Bool=false)
         x = Float64(from.coordinates[i, 1])
         y = Float64(from.coordinates[i, 2])
         idx = _nearest_shape(tree, x, y)
-        _shape_distance(to.geometries[idx], dist_fn, x, y, cx[idx], cy[idx])
+        _shape_distance(to.shapes[idx].geometry, dist_fn, x, y, cx[idx], cy[idx])
     end
     return result
 end
 
 function distances(from::SpatialShapes, to::SpatialShapes; signed::Bool=false)
-    feats = from.features
-    n = length(from.geometries)
+    n    = length(from.shapes)
     n == 0 && return Float64[]
-    n_to = length(to.geometries)
+    n_to = length(to.shapes)
     n_to == 0 && return fill(Inf, n)
-
-    has_c = ncol(feats) > 0 &&
-            "x_centroid" in names(feats) &&
-            "y_centroid" in names(feats)
 
     tree, cx, cy = _centroid_tree(to)
     dist_fn = signed ? GeometryOps.signed_distance : GeometryOps.distance
 
     result = ThreadsX.map(1:n) do i
-        if has_c
-            x, y = Float64(feats.x_centroid[i]), Float64(feats.y_centroid[i])
-        else
-            c = _geom_centroid(from.geometries[i])
-            c === nothing && return Inf
-            x, y = Float64(c[1]), Float64(c[2])
-        end
+        c = _geom_centroid(from.shapes[i].geometry)
+        c === nothing && return Inf
+        x, y = Float64(c[1]), Float64(c[2])
         idx = _nearest_shape(tree, x, y)
-        _shape_distance(to.geometries[idx], dist_fn, x, y, cx[idx], cy[idx])
+        _shape_distance(to.shapes[idx].geometry, dist_fn, x, y, cx[idx], cy[idx])
     end
     return result
 end
@@ -88,21 +79,12 @@ function distances(from::SpatialPoints, to::SpatialExtent)
 end
 
 function distances(from::SpatialShapes, to::SpatialExtent)
-    feats = from.features
-    n = length(from.geometries)
+    n = length(from.shapes)
     n == 0 && return Float64[]
-    has_c = ncol(feats) > 0 &&
-            "x_centroid" in names(feats) &&
-            "y_centroid" in names(feats)
     return map(1:n) do i
-        if has_c
-            x, y = Float64(feats.x_centroid[i]), Float64(feats.y_centroid[i])
-        else
-            c = _geom_centroid(from.geometries[i])
-            c === nothing && return Inf
-            x, y = Float64(c[1]), Float64(c[2])
-        end
-        _dist_to_extent(x, y, to)
+        c = _geom_centroid(from.shapes[i].geometry)
+        c === nothing && return Inf
+        _dist_to_extent(Float64(c[1]), Float64(c[2]), to)
     end
 end
 
@@ -112,22 +94,13 @@ end
 
 # Build a KDTree over the centroids of `shp`. Returns (tree, cx, cy).
 function _centroid_tree(shp::SpatialShapes)
-    n = length(shp.geometries)
-    feats = shp.features
-    has_c = ncol(feats) > 0 &&
-            "x_centroid" in names(feats) &&
-            "y_centroid" in names(feats)
+    n  = length(shp.shapes)
     cx = Vector{Float64}(undef, n)
     cy = Vector{Float64}(undef, n)
-    if has_c
-        cx .= Float64.(feats.x_centroid)
-        cy .= Float64.(feats.y_centroid)
-    else
-        for i in 1:n
-            c = _geom_centroid(shp.geometries[i])
-            cx[i] = c !== nothing ? Float64(c[1]) : 0.0
-            cy[i] = c !== nothing ? Float64(c[2]) : 0.0
-        end
+    for i in 1:n
+        c = _geom_centroid(shp.shapes[i].geometry)
+        cx[i] = c !== nothing ? Float64(c[1]) : 0.0
+        cy[i] = c !== nothing ? Float64(c[2]) : 0.0
     end
     data = Matrix{Float64}(undef, 2, n)
     data[1, :] .= cx

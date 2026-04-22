@@ -171,20 +171,21 @@ end
 
 # ─── Shapes writer ────────────────────────────────────────────────────────────
 
-function _write_sd_shapes(path::String, shp::SpatialShapes)
+function _write_sd_shapes(path::String, shp::SpatialShapes{G,D}) where {G,D}
     mkpath(path)
     group_attrs = _zarr_group_attrs(shp.metadata)
     _zwrite_group(path, group_attrs)
 
-    df = copy(shp.features)
-    if !isempty(shp.geometries)
-        first_geom = shp.geometries[1]
-        if first_geom isa AbstractVector{UInt8}
-            df[!, "geometry"] = [Vector{UInt8}(g) for g in shp.geometries]
-        elseif first_geom isa GeometryBasics.Polygon
-            df[!, "geometry"] = [_encode_wkb_polygon(g) for g in shp.geometries]
-        else
-            @warn "_write_sd_shapes: geometries are $(typeof(first_geom)), not WKB bytes or Polygon — writing features only. Convert to WKB before calling to_spatialdata for full spec compliance."
+    df = isempty(shp.shapes) ? DataFrame() : DataFrame(shp)
+
+    if !isempty(shp.shapes)
+        first_geom = shp.shapes[1].geometry
+        if first_geom isa GeometryBasics.Polygon
+            df[!, "geometry"] = [_encode_wkb_polygon(s.geometry) for s in shp.shapes]
+        elseif first_geom isa GeometryBasics.Circle
+            @warn "_write_sd_shapes: Circle WKB encoding not yet implemented — skipping geometry column"
+        elseif first_geom !== nothing
+            @warn "_write_sd_shapes: unsupported geometry type $(typeof(first_geom)) — skipping geometry column"
         end
     end
 

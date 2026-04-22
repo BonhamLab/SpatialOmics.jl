@@ -201,29 +201,107 @@ function Base.show(io::IO, lbl::SpatialLabels)
 end
 
 # ---------------------------------------------------------------------------
-# SpatialShapes
+# SpatialShape / SpatialShapes
 # ---------------------------------------------------------------------------
 
 """
-    SpatialShapes
+    SpatialShape{G, D<:NamedTuple}
 
-A collection of geometric shapes (circles, polygons) representing cell
-boundaries or tissue regions as vectors, rather than rasterised label images.
+A single geometric shape paired with its per-shape data.
 
 Fields
 ------
-- `geometries` : Vector — each element is a shape description (polygon / circle)
-- `features`   : DataFrame — per-shape annotations
-- `metadata`   : Dict{String,Any}
+- `geometry` : G — the geometry object (`GeometryBasics.Polygon`, `GeometryBasics.Circle`, …)
+- `data`     : D — per-shape annotations as a `NamedTuple`
 """
-struct SpatialShapes <: SpatialElement
-    geometries::Vector{Any}
-    features::DataFrame
+struct SpatialShape{G, D<:NamedTuple}
+    geometry::G
+    data::D
+end
+
+"""
+    SpatialShapes{G, D<:NamedTuple}
+
+A homogeneous collection of geometric shapes. All shapes share the same
+geometry type `G` and data schema `D`.
+
+Implements the Tables.jl interface, so `DataFrame(ss)` works automatically.
+
+Fields
+------
+- `shapes`   : Vector{SpatialShape{G, D}} — the shapes
+- `metadata` : Dict{String,Any}
+"""
+struct SpatialShapes{G, D<:NamedTuple} <: SpatialElement
+    shapes::Vector{SpatialShape{G, D}}
     metadata::Dict{String,Any}
 end
 
-function Base.show(io::IO, shp::SpatialShapes)
-    print(io, "SpatialShapes(", length(shp.geometries), " shapes, features: [", _cols_str(shp.features), "])")
+# Internal helper: convert a Tables row to a NamedTuple.
+_row_to_nt(r) = NamedTuple{Tuple(Tables.columnnames(r))}(
+    Tuple(Tables.getcolumn(r, c) for c in Tables.columnnames(r)))
+
+# Backward-compatible constructor: accepts (geoms, features, metadata).
+# features must satisfy Tables.istable.  Pairs each geometry with its row.
+function SpatialShapes(geoms::AbstractVector{G}, features, metadata::Dict{String,Any}) where G
+    rows = collect(Tables.rows(features))
+    if isempty(rows)
+        return SpatialShapes(SpatialShape{G, NamedTuple{(), Tuple{}}}[], metadata)
+    end
+    first_nt = _row_to_nt(first(rows))
+    D = typeof(first_nt)
+    shapes = Vector{SpatialShape{G, D}}(undef, min(length(geoms), length(rows)))
+    for (k, (g, r)) in enumerate(zip(geoms, rows))
+        shapes[k] = SpatialShape{G, D}(g, _row_to_nt(r))
+    end
+    return SpatialShapes(shapes, metadata)
+end
+
+# Tables.jl interface — enables DataFrame(ss)
+Tables.istable(::Type{<:SpatialShapes}) = true
+Tables.columnaccess(::Type{<:SpatialShapes}) = true
+
+function Tables.columns(ss::SpatialShapes{G,D}) where {G,D}
+    fnames = fieldnames(D)
+    isempty(fnames) && return NamedTuple()
+    NamedTuple{fnames}(
+        tuple(([getfield(s.data, f) for s in ss.shapes] for f in fnames)...)
+    )
+end
+
+Tables.schema(::SpatialShapes{G,D}) where {G,D} =
+    Tables.Schema(fieldnames(D), Tuple{fieldtypes(D)...})
+
+Tables.columnnames(::SpatialShapes{G,D}) where {G,D} = fieldnames(D)
+
+Tables.getcolumn(ss::SpatialShapes, nm::Symbol) = getfield(Tables.columns(ss), nm)
+Tables.getcolumn(ss::SpatialShapes, i::Int)     = getfield(Tables.columns(ss), i)
+
+# Collection interface
+Base.length(ss::SpatialShapes)           = length(ss.shapes)
+Base.getindex(ss::SpatialShapes, i::Int) = ss.shapes[i]
+Base.iterate(ss::SpatialShapes, args...) = iterate(ss.shapes, args...)
+
+"""
+    geometry(ss::SpatialShapes, i::Int) -> G
+
+Return the geometry of shape `i` in `ss`.
+"""
+geometry(ss::SpatialShapes, i::Int) = ss.shapes[i].geometry
+
+"""
+    geometries(ss::SpatialShapes) -> Vector
+
+Return all geometries in `ss`.
+"""
+geometries(ss::SpatialShapes) = [s.geometry for s in ss.shapes]
+
+function Base.show(io::IO, shp::SpatialShapes{G,D}) where {G,D}
+    fnames = fieldnames(D)
+    cols = isempty(fnames) ? "(no data)" :
+           length(fnames) <= 4 ? join(string.(fnames), ", ") :
+           join(string.(fnames[1:3]), ", ") * ", …+$(length(fnames)-3)"
+    print(io, "SpatialShapes{$(G)}($(length(shp.shapes)) shapes, data: [$cols])")
 end
 
 # ---------------------------------------------------------------------------

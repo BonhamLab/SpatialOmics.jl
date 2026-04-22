@@ -11,12 +11,12 @@ using DataFrames
 using Statistics
 using GeometryBasics
 using GeometryOps
+using Tables
 using SpatialOmicsBase
 
-import SpatialOmicsBase: _crop, _geom_centroid
+import SpatialOmicsBase: _crop, _geom_centroid, crop
 
 export normalize_counts, correct_batch_effects, impute_missing
-export crop
 
 # ---------------------------------------------------------------------------
 # crop — materialise a spatially-filtered copy of an element or dataset
@@ -50,9 +50,9 @@ crop(shp::SpatialShapes,  ext::SpatialExtent) = _crop(shp, ext)
 
 function crop(tbl::SpatialTable, ext::SpatialExtent, shp::SpatialShapes)
     cropped_shp = _crop(shp, ext)
-    ikey = instance_key(tbl)
-    valid_ids = Set(cropped_shp.features[!, ikey])
-    mask = [id in valid_ids for id in tbl.obs[!, ikey]]
+    ikey        = Symbol(instance_key(tbl))
+    valid_ids   = Set(Tables.getcolumn(cropped_shp, ikey))
+    mask = [id in valid_ids for id in tbl.obs[!, String(ikey)]]
     return SpatialTable(tbl.data[mask, :], tbl.obs[mask, :], tbl.var, tbl.metadata)
 end
 
@@ -93,8 +93,8 @@ end
 # Bounding box of a SpatialShapes element (union of all geometry bounds).
 function _shapes_extent(roi::SpatialShapes)
     xs = Float64[]; ys = Float64[]
-    for g in roi.geometries
-        _collect_coords!(xs, ys, g)
+    for s in roi.shapes
+        _collect_coords!(xs, ys, s.geometry)
     end
     isempty(xs) && return SpatialExtent(-Inf, Inf, -Inf, Inf)
     return SpatialExtent(minimum(xs), maximum(xs), minimum(ys), maximum(ys))
@@ -116,41 +116,29 @@ function crop(pts::SpatialPoints, roi::SpatialShapes)
     # Pre-filter to extent bounding box to reduce per-point polygon tests.
     roi_ext = _shapes_extent(roi)
     candidates = _crop(pts, roi_ext)
-    geoms = roi.geometries
     n = size(candidates.coordinates, 1)
     mask = Vector{Bool}(undef, n)
     for i in 1:n
         x, y = Float64(candidates.coordinates[i, 1]), Float64(candidates.coordinates[i, 2])
         pt = GeometryBasics.Point2(x, y)
-        mask[i] = any(GeometryOps.signed_distance(pt, g) <= 0 for g in geoms)
+        mask[i] = any(GeometryOps.signed_distance(pt, s.geometry) <= 0 for s in roi.shapes)
     end
     feats = candidates.features isa DataFrame ? candidates.features : DataFrame(candidates.features)
     return SpatialPoints(candidates.coordinates[mask, :], feats[mask, :], candidates.metadata)
 end
 
 function crop(shp::SpatialShapes, roi::SpatialShapes)
-    roi_ext = _shapes_extent(roi)
+    roi_ext    = _shapes_extent(roi)
     candidates = _crop(shp, roi_ext)
-    geoms = roi.geometries
-    n_cands = length(candidates.geometries)
-    mask = Vector{Bool}(undef, n_cands)
-    feats = candidates.features
-    has_centroids = ncol(feats) > 0 &&
-                    "x_centroid" in names(feats) &&
-                    "y_centroid" in names(feats)
+    n_cands    = length(candidates.shapes)
+    mask       = Vector{Bool}(undef, n_cands)
     for i in 1:n_cands
-        if has_centroids
-            x, y = Float64(feats.x_centroid[i]), Float64(feats.y_centroid[i])
-        else
-            cxy = SpatialOmicsBase._geom_centroid(candidates.geometries[i])
-            cxy === nothing && (mask[i] = false; continue)
-            x, y = Float64(cxy[1]), Float64(cxy[2])
-        end
-        pt = GeometryBasics.Point2(x, y)
-        mask[i] = any(GeometryOps.signed_distance(pt, g) <= 0 for g in geoms)
+        cxy = SpatialOmicsBase._geom_centroid(candidates.shapes[i].geometry)
+        cxy === nothing && (mask[i] = false; continue)
+        pt = GeometryBasics.Point2(Float64(cxy[1]), Float64(cxy[2]))
+        mask[i] = any(GeometryOps.signed_distance(pt, s.geometry) <= 0 for s in roi.shapes)
     end
-    sub_feats = has_centroids ? feats[mask, :] : feats
-    return SpatialShapes(candidates.geometries[mask], sub_feats, candidates.metadata)
+    return SpatialShapes(candidates.shapes[mask], candidates.metadata)
 end
 
 # ---------------------------------------------------------------------------

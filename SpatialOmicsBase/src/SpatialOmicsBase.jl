@@ -23,7 +23,7 @@ using Tables
 
 export SpatialDataset
 export SpatialElement
-export SpatialImage, SpatialPoints, SpatialLabels, SpatialShapes, SpatialTable
+export SpatialImage, SpatialPoints, SpatialLabels, SpatialShape, SpatialShapes, SpatialTable
 export CoordinateSystem, Transformation
 export AffineTransformation, IdentityTransformation
 
@@ -31,6 +31,7 @@ export AffineTransformation, IdentityTransformation
 export spatial_dataset
 
 export images, labels, points, shapes, tables, metadata
+export geometry, geometries
 export channels, channels!
 export add_roi!
 export region, region_key, instance_key

@@ -1,6 +1,8 @@
 using Test
 using SpatialOmicsBase
 using DataFrames
+using Tables
+using GeometryBasics
 
 @testset "SpatialOmicsBase.jl" begin
 
@@ -73,6 +75,54 @@ using DataFrames
         ds = spatial_dataset()
         ds.metadata["platform"] = "xenium"
         @test SpatialOmicsBase.metadata(ds)["platform"] == "xenium"
+    end
+
+    @testset "SpatialShapes" begin
+        ring = Point2f[(0,0),(1,0),(1,1),(0,1),(0,0)]
+        poly = GeometryBasics.Polygon(ring)
+
+        # Direct construction
+        s1 = SpatialShape(poly, (cell = "A", cell_id = Int32(1)))
+        @test s1.geometry isa GeometryBasics.Polygon
+        @test s1.data.cell == "A"
+
+        shapes = SpatialShapes([s1], Dict{String,Any}())
+        @test length(shapes) == 1
+        @test geometry(shapes, 1) isa GeometryBasics.Polygon
+
+        # Tables.jl interface
+        @test Tables.istable(typeof(shapes))
+        cols = Tables.columns(shapes)
+        @test cols.cell == ["A"]
+        @test cols.cell_id == [Int32(1)]
+
+        # DataFrame conversion
+        df = DataFrame(shapes)
+        @test nrow(df) == 1
+        @test "cell" in names(df)
+
+        # Backward-compat constructor with DataFrame
+        feats = DataFrame(cell = ["B", "C"], cell_id = Int32[2, 3])
+        poly2 = GeometryBasics.Polygon(Point2f[(2,0),(3,0),(3,1),(2,1),(2,0)])
+        ss2 = SpatialShapes([poly, poly2], feats, Dict{String,Any}())
+        @test length(ss2) == 2
+        @test Tables.getcolumn(ss2, :cell) == ["B", "C"]
+
+        # geometry/geometries accessors
+        gs = geometries(ss2)
+        @test length(gs) == 2
+        @test gs[1] isa GeometryBasics.Polygon
+    end
+
+    @testset "add_roi! / extent(SpatialShapes)" begin
+        ds  = spatial_dataset()
+        add_roi!(ds, "test_roi", SpatialExtent(0.0, 10.0, 0.0, 10.0))
+        @test haskey(shapes(ds), "test_roi")
+        shp = shapes(ds, "test_roi")
+        @test length(shp) == 1
+        ext = extent(shp, 1)
+        @test ext.xmin ≈ 0.0 && ext.xmax ≈ 10.0
+        @test ext.ymin ≈ 0.0 && ext.ymax ≈ 10.0
     end
 
 end

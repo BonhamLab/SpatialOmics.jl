@@ -408,20 +408,20 @@ function _read_sd_shapes(path::String)::SpatialShapes
     geoms = if geom_col in names(df)
         if has_radius
             # Circle format: WKB Point centre + separate radius column
-            Any[_decode_wkb_circle(bytes, r)
+            [_decode_wkb_circle(bytes, r)
                 for (bytes, r) in zip(df[:, geom_col], df.radius)]
         else
-            Any[_decode_wkb(bytes) for bytes in df[:, geom_col]]
+            [_decode_wkb(bytes) for bytes in df[:, geom_col]]
         end
     else
-        Any[]
+        Nothing[]
     end
 
     # Apply the element-level coordinate transform (local → global) so that
     # shapes align with images that carry the same global coordinate system.
     sx, sy = _parse_element_scale(meta, 2)
     if sx != 1.0 || sy != 1.0
-        geoms = Any[_apply_scale(g, sx, sy) for g in geoms]
+        geoms = [_apply_scale(g, sx, sy) for g in geoms]
     end
 
     feat_df = df[:, setdiff(names(df), [geom_col])]

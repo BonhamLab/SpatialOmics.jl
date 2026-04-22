@@ -86,7 +86,8 @@ end
 _summary_image(img::SpatialImage)    = join(size(img.data), "×") * " $(eltype(img.data))"
 _summary_labels(lbl::SpatialLabels)  = join(size(lbl.data), "×") * " $(eltype(lbl.data))"
 _summary_points(pts::SpatialPoints)  = "$(size(pts.coordinates, 1)) pts × $(ncol(pts.features)) cols"
-_summary_shapes(shp::SpatialShapes)  = "$(length(shp.geometries)) shapes × $(ncol(shp.features)) cols"
+_summary_shapes(shp::SpatialShapes{G,D}) where {G,D} =
+    "$(length(shp.shapes)) shapes · $(length(fieldnames(D))) data fields"
 _summary_table(tbl::SpatialTable)    = "$(size(tbl.data, 1)) obs × $(size(tbl.data, 2)) vars"
 
 # ---------------------------------------------------------------------------

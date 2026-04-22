@@ -144,32 +144,21 @@ end
 """
     extent(shp::SpatialShapes, i::Int) -> SpatialExtent{Float64}
 
-Return the bounding box of geometry `i` in `shp`.
-
-Fast path: if the features DataFrame contains `xmin`, `xmax`, `ymin`, `ymax`
-columns (as written by `CosMxReader` for FOV shapes), they are used directly.
-Otherwise the geometry object is decoded — supports `GeometryBasics.Polygon`,
-`GeometryBasics.Circle`, and raw WKB bytes (as stored after a zarr round-trip).
+Return the bounding box of geometry `i` in `shp`. Supports
+`GeometryBasics.Polygon`, `GeometryBasics.Circle`, and raw WKB bytes.
 
 ```julia
 # Get the extent of FOV 3 and crop the dataset to it
-i = findfirst(==(3), ds.shapes["fovs"].features.fov_id)
-view(ds, extent(ds.shapes["fovs"], i))
+fov_ids = Tables.getcolumn(shapes(ds, "fovs"), :fov_id)
+view(ds, extent(shapes(ds, "fovs"), findfirst(==(3), fov_ids)))
 
 # User-defined ROIs work identically
-view(ds, extent(ds.shapes["rois"], 2))
+view(ds, extent(shapes(ds, "rois"), 1))
 ```
 """
 function extent(shp::SpatialShapes, i::Int)::SpatialExtent{Float64}
     cs = get(shp.metadata, "coordinate_system", "global")
-    # Fast path: pre-computed bbox columns
-    feats = shp.features
-    if nrow(feats) >= i &&
-       all(c -> c in names(feats), ("xmin", "xmax", "ymin", "ymax"))
-        return SpatialExtent(Float64(feats[i, :xmin]), Float64(feats[i, :xmax]),
-                             Float64(feats[i, :ymin]), Float64(feats[i, :ymax]), cs)
-    end
-    return _geom_extent(shp.geometries[i], cs)
+    return _geom_extent(shp.shapes[i].geometry, cs)
 end
 
 # Geometry → SpatialExtent dispatch
@@ -217,16 +206,9 @@ _geom_extent(g, cs) = error("extent: unsupported geometry type $(typeof(g))")
 Return the bounding box of all geometries in `shp`.
 """
 function extent(shp::SpatialShapes)::SpatialExtent{Float64}
-    isempty(shp.geometries) && error("extent: SpatialShapes is empty")
+    isempty(shp.shapes) && error("extent: SpatialShapes is empty")
     cs = get(shp.metadata, "coordinate_system", "global")
-    # Fast path: bbox columns present
-    feats = shp.features
-    if nrow(feats) == length(shp.geometries) &&
-       all(c -> c in names(feats), ("xmin", "xmax", "ymin", "ymax"))
-        return SpatialExtent(Float64(minimum(feats.xmin)), Float64(maximum(feats.xmax)),
-                             Float64(minimum(feats.ymin)), Float64(maximum(feats.ymax)), cs)
-    end
-    exts = [_geom_extent(g, cs) for g in shp.geometries]
+    exts = [_geom_extent(s.geometry, cs) for s in shp.shapes]
     SpatialExtent(minimum(e.xmin for e in exts), maximum(e.xmax for e in exts),
                   minimum(e.ymin for e in exts), maximum(e.ymax for e in exts), cs)
 end
@@ -275,33 +257,13 @@ function _crop(pts::SpatialPoints{T}, ext::SpatialExtent) where T
     return SpatialPoints(pts.coordinates[mask, :], feats[mask, :], pts.metadata)
 end
 
-function _crop(shp::SpatialShapes, ext::SpatialExtent)
-    feats = shp.features
-    has_feats = ncol(feats) > 0 && nrow(feats) == length(shp.geometries)
-    if has_feats && "x_centroid" in names(feats) && "y_centroid" in names(feats)
-        x, y = feats.x_centroid, feats.y_centroid
-        mask = (x .>= ext.xmin) .& (x .<= ext.xmax) .&
-               (y .>= ext.ymin) .& (y .<= ext.ymax)
-        return SpatialShapes(shp.geometries[mask], feats[mask, :], shp.metadata)
-    end
-    # Fallback: compute centroids from geometry objects.
-    geoms = shp.geometries
-    n = length(geoms)
-    mask = Vector{Bool}(undef, n)
-    any_geom = false
-    for i in 1:n
-        cxy = _geom_centroid(geoms[i])
-        if cxy !== nothing
-            cx, cy = cxy
-            mask[i] = ext.xmin <= cx <= ext.xmax && ext.ymin <= cy <= ext.ymax
-            any_geom = true
-        else
-            mask[i] = false
-        end
-    end
-    any_geom || return shp
-    sub_feats = has_feats ? feats[mask, :] : feats
-    return SpatialShapes(geoms[mask], sub_feats, shp.metadata)
+function _crop(shp::SpatialShapes{G,D}, ext::SpatialExtent) where {G,D}
+    mask = [let cxy = _geom_centroid(s.geometry)
+                cxy !== nothing &&
+                ext.xmin <= cxy[1] <= ext.xmax &&
+                ext.ymin <= cxy[2] <= ext.ymax
+            end for s in shp.shapes]
+    return SpatialShapes(shp.shapes[mask], shp.metadata)
 end
 
 _geom_centroid(::Nothing)                   = nothing
@@ -459,16 +421,13 @@ end
     add_roi!(ds, name, ext::SpatialExtent) -> ds
     add_roi!(ds, name, poly::GeometryBasics.Polygon) -> ds
 
-Store a named ROI as a `SpatialShapes` entry in `ds.shapes[name]`.
-
-The features DataFrame always contains `xmin`, `xmax`, `ymin`, `ymax`,
-`x_centroid`, `y_centroid` columns so that `extent(ds.shapes[name], 1)`
-works via the fast bbox path without decoding the geometry.
+Store a named ROI as a single-shape `SpatialShapes` entry in `ds.shapes[name]`.
+The shape data carries `(name = name,)`.
 
 ```julia
 add_roi!(ds, "tumor",    SpatialExtent(xmin, xmax, ymin, ymax))
 add_roi!(ds, "irregular", GeometryBasics.Polygon([...]))
-view(ds, extent(ds.shapes["tumor"], 1))
+view(ds, extent(shapes(ds, "tumor"), 1))
 ```
 """
 function add_roi!(ds::SpatialDataset, name::String, ext::SpatialExtent)
@@ -490,16 +449,8 @@ function add_roi!(ds::SpatialDataset, name::String, poly::GeometryBasics.Polygon
 end
 
 function _roi_shapes!(ds, name, poly, xmn, xmx, ymn, ymx)
-    feats = DataFrame(
-        name       = [name],
-        xmin       = [Float32(xmn)],
-        xmax       = [Float32(xmx)],
-        ymin       = [Float32(ymn)],
-        ymax       = [Float32(ymx)],
-        x_centroid = [Float32((xmn + xmx) / 2)],
-        y_centroid = [Float32((ymn + ymx) / 2)],
-    )
-    ds.shapes[name] = SpatialShapes([poly], feats, Dict{String,Any}())
+    shape = SpatialShape(poly, (name = name,))
+    ds.shapes[name] = SpatialShapes([shape], Dict{String,Any}())
     return ds
 end
 
@@ -614,7 +565,7 @@ function filter(roi::SpatialDatasetView, tbl_key::String)
     haskey(ds.shapes, rg) || return tbl
 
     cropped = collect(SpatialElementView(ds.shapes[rg], roi.extent))
-    ids     = Set(cropped.features[!, ik])
+    ids     = Set(Tables.getcolumn(cropped, Symbol(ik)))
 
     mask = tbl.obs[!, ik] .∈ Ref(ids)
     return SpatialTable(tbl.data[mask, :], tbl.obs[mask, :], tbl.var, tbl.metadata)

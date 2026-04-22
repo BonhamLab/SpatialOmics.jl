@@ -80,7 +80,7 @@ end
 @testset "from_spatialdata — Xenium shapes" begin
     ds = from_spatialdata(XENIUM_ZARR)
     cb = ds.shapes["cell_boundaries"]
-    @test length(cb.geometries) == 162_254
+    @test length(cb.shapes) == 162_254
 end
 
 @testset "from_spatialdata — Xenium table dimensions" begin
