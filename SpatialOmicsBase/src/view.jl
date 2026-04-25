@@ -252,12 +252,15 @@ _crop(pts::SpatialPoints, xmin::Real, xmax::Real, ymin::Real, ymax::Real,
     _crop(pts, SpatialExtent(xmin, xmax, ymin, ymax, cs))
 
 function _crop(pts::SpatialPoints{T}, ext::SpatialExtent) where T
-    mask = _points_extent_mask(pts, ext)
-    feats = pts.features isa DataFrame ? pts.features : DataFrame(pts.features)
-    return SpatialPoints(pts.coordinates[mask, :], feats[mask, :], pts.metadata)
+    mask  = _points_extent_mask(pts, ext)
+    feats = pts.features === nothing ? nothing :
+            NamedTuple{keys(pts.features)}(Tuple(v[mask] for v in values(pts.features)))
+    SpatialPoints{T}(pts.coordinates[mask, :],
+                     isempty(pts.labels) ? String[] : pts.labels[mask],
+                     feats, pts.metadata)
 end
 
-function _crop(shp::SpatialShapes{G,D}, ext::SpatialExtent) where {G,D}
+function _crop(shp::SpatialShapes{G}, ext::SpatialExtent) where G
     mask = [let cxy = _geom_centroid(s.geometry)
                 cxy !== nothing &&
                 ext.xmin <= cxy[1] <= ext.xmax &&
@@ -315,13 +318,14 @@ end
 
 function Base.getproperty(v::SpatialElementView{<:SpatialPoints}, s::Symbol)
     s in (:parent, :extent) && return getfield(v, s)
-    if s === :coordinates || s === :features
+    if s in (:coordinates, :labels, :features)
         pts  = getfield(v, :parent)
         ext  = getfield(v, :extent)
         mask = _points_extent_mask(pts, ext)
         s === :coordinates && return view(pts.coordinates, mask, :)
-        feats = pts.features isa DataFrame ? pts.features : DataFrame(pts.features)
-        return view(feats, mask, :)
+        s === :labels      && return isempty(pts.labels) ? String[] : view(pts.labels, mask)
+        pts.features === nothing && return nothing
+        return NamedTuple{keys(pts.features)}(Tuple(view(c, mask) for c in values(pts.features)))
     end
     return getproperty(getfield(v, :parent), s)
 end
@@ -449,7 +453,7 @@ function add_roi!(ds::SpatialDataset, name::String, poly::GeometryBasics.Polygon
 end
 
 function _roi_shapes!(ds, name, poly, xmn, xmx, ymn, ymx)
-    shape = SpatialShape(poly, (name = name,))
+    shape = SpatialShape(poly, name, NamedTuple())
     ds.shapes[name] = SpatialShapes([shape], Dict{String,Any}())
     return ds
 end

@@ -148,9 +148,9 @@ function _read_transcripts(path::String)
                   types  = Dict("fov" => Int32, "cell_ID" => Int32,
                                 "x_global_px" => Float32, "y_global_px" => Float32,
                                 "z" => Int8))
-    coords = Matrix{Float32}(hcat(tx.x_global_px, tx.y_global_px))
-    feats  = select(tx, Not([:x_global_px, :y_global_px]))
-    return SpatialPoints(coords, feats, Dict{String,Any}("coord_cols" => ["x", "y"]))
+    # Normalize to canonical schema (see platform_reader.jl)
+    rename!(tx, :target => :gene, :cell_ID => :cell_id, :CellComp => :cell_compartment)
+    return SpatialPoints(tx; x_col=:x_global_px, y_col=:y_global_px, label_col=:gene)
 end
 
 # ─── Cell polygons ────────────────────────────────────────────────────────────
@@ -168,7 +168,7 @@ function _read_polygons(path::String)
         ring = Point2f.(xs, ys)
         ring[1] != ring[end] && push!(ring, ring[1])
         poly = GeometryBasics.Polygon(ring)
-        SpatialShape(poly, (cell = string(key.cell), cell_ID = grp.cellID[1]))
+        SpatialShape(poly, string(key.cell), (cell = string(key.cell), cell_ID = grp.cellID[1]))
     end for (key, grp) in pairs(grouped)]
 
     return SpatialShapes(shapes, Dict{String,Any}())
@@ -222,7 +222,7 @@ function _build_fov_shapes(
         ring = GeometryBasics.Point2f[
             (xmin, ymin), (xmax, ymin), (xmax, ymax), (xmin, ymax), (xmin, ymin),
         ]
-        SpatialShape(GeometryBasics.Polygon(ring), (fov_id = Int32(fov_id),))
+        SpatialShape(GeometryBasics.Polygon(ring), string(fov_id), (fov_id = Int32(fov_id),))
     end for fov_id in fov_ids]
     return SpatialShapes(shapes, Dict{String,Any}())
 end

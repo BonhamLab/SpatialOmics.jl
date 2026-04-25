@@ -5,7 +5,6 @@ authors = []
 
 [deps]
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
-DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
 ImageCore = "a09fc81d-aa75-5fe9-8630-4744c3626534"
 Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
@@ -16,7 +15,6 @@ Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [compat]
 CairoMakie = "0.15.9"
-DataFrames = "1.8.2"
 GeometryBasics = "0.5.10"
 ImageCore = "0.10.5"
 Makie = "0.24.9"

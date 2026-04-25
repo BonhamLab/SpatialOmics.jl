@@ -21,6 +21,10 @@ end
 Convert a `SpatialPoints` to scatter arguments: a vector of `Point2f`
 constructed from the first two coordinate columns (x = col 1, y = col 2).
 """
+function Makie.convert_arguments(P::Type{<:Scatter}, pt::SpatialPoint)
+    return Makie.convert_arguments(P, [Point2f(pt.coordinates...)])
+end
+
 function Makie.convert_arguments(P::Type{<:Scatter}, pts::SpatialPoints)
     coords = pts.coordinates
     points = [Point2f(coords[i, 1], coords[i, 2]) for i in axes(coords, 1)]

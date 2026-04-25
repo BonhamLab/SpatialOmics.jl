@@ -7,14 +7,13 @@ designed to be pure and composable, operating on `SpatialDataset` objects.
 """
 module Preprocessing
 
-using DataFrames
 using Statistics
 using GeometryBasics
 using GeometryOps
 using Tables
 using SpatialOmicsBase
 
-import SpatialOmicsBase: _crop, _geom_centroid, crop
+import SpatialOmicsBase: _crop, _geom_centroid
 
 export normalize_counts, correct_batch_effects, impute_missing
 
@@ -112,19 +111,15 @@ end
 
 _collect_coords!(xs, ys, ::Any) = nothing  # unsupported geometry type — skip
 
-function crop(pts::SpatialPoints, roi::SpatialShapes)
-    # Pre-filter to extent bounding box to reduce per-point polygon tests.
-    roi_ext = _shapes_extent(roi)
-    candidates = _crop(pts, roi_ext)
-    n = size(candidates.coordinates, 1)
-    mask = Vector{Bool}(undef, n)
-    for i in 1:n
-        x, y = Float64(candidates.coordinates[i, 1]), Float64(candidates.coordinates[i, 2])
-        pt = GeometryBasics.Point2(x, y)
-        mask[i] = any(GeometryOps.signed_distance(pt, s.geometry) <= 0 for s in roi.shapes)
-    end
-    feats = candidates.features isa DataFrame ? candidates.features : DataFrame(candidates.features)
-    return SpatialPoints(candidates.coordinates[mask, :], feats[mask, :], candidates.metadata)
+"""
+    Base.filter(pts::SpatialPoints, roi::SpatialShapes) -> SpatialPoints
+
+Return subset of `pts` lying inside any geometry in `roi`. Uses bounding-box
+pre-filter then exact signed-distance polygon test via `pt ∈ roi`.
+"""
+function Base.filter(pts::SpatialPoints, roi::SpatialShapes)
+    candidates = collect(view(pts, extent(roi)))   # bounding-box pre-filter
+    Base.filter(pt -> pt ∈ roi, candidates)
 end
 
 function crop(shp::SpatialShapes, roi::SpatialShapes)

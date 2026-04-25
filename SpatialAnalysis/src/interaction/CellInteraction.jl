@@ -7,7 +7,6 @@ communication scoring.
 """
 module CellInteraction
 
-using DataFrames
 using Statistics
 using ThreadsX
 using SpatialOmicsBase

@@ -11,6 +11,7 @@ on SpatialOmicsBase. End users depend on the SpatialOmics.jl umbrella.
 """
 module SpatialOmicsBase
 
+using ColorTypes: Colorant
 using DiskArrays
 using DataFrames
 using GeometryBasics
@@ -23,7 +24,7 @@ using Tables
 
 export SpatialDataset
 export SpatialElement
-export SpatialImage, SpatialPoints, SpatialLabels, SpatialShape, SpatialShapes, SpatialTable
+export SpatialImage, SpatialPoint, SpatialPoints, SpatialLabels, SpatialShape, SpatialShapes, SpatialTable
 export CoordinateSystem, Transformation
 export AffineTransformation, IdentityTransformation
 
@@ -31,6 +32,7 @@ export AffineTransformation, IdentityTransformation
 export spatial_dataset
 
 export images, labels, points, shapes, tables, metadata
+export record_column_map!
 export geometry, geometries
 export channels, channels!
 export add_roi!
@@ -42,7 +44,7 @@ export transform_coordinates, compose_transformations, invert_transformation
 # Spatial query primitives
 export SpatialExtent
 export SpatialElementView, SpatialDatasetView
-export extent, intersects, crop
+export extent, intersects
 # filter(roi, key) is public but unexported — conflicts with Base.filter at call sites.
 # Access qualified: SpatialOmicsBase.filter(roi, key) or SO.filter(roi, key).
 public filter

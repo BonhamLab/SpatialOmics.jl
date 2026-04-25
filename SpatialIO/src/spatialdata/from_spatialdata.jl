@@ -305,35 +305,37 @@ function _read_sd_points(path::String)::SpatialPoints
     (isfile(parquet_path) || isdir(parquet_path)) ||
         error("_read_sd_points: missing $parquet_path")
 
-    # Read all rows eagerly. Parquet2.Dataset(dir) returns 0 rows via Tables.jl
-    # for partitioned datasets, so we use _read_parquet (part-by-part vcat).
     features_df = _read_parquet(parquet_path)
 
-    # Determine coordinate columns from metadata (default: x, y)
-    all_cols = names(features_df)
-    axes = haskey(meta, "attributes") && haskey(meta["attributes"], "axes") ?
-           String.(meta["attributes"]["axes"]) : ["x", "y"]
+    # Coordinate columns from metadata axes; fallback to "x","y"
+    all_cols   = names(features_df)
+    axes       = haskey(meta, "attributes") && haskey(meta["attributes"], "axes") ?
+                 String.(meta["attributes"]["axes"]) : ["x", "y"]
     coord_cols = [a for a in axes if a in all_cols]
     isempty(coord_cols) && (coord_cols = ["x", "y"])
 
-    # Build N×D Float32 coordinate matrix
-    coords = Matrix{Float32}(reduce(hcat, [Float32.(features_df[!, c]) for c in coord_cols]))
+    # Build N×2 Float32 coordinate matrix (take first two coord axes)
+    cx, cy = coord_cols[1], coord_cols[2]
+    coords  = Matrix{Float32}(undef, nrow(features_df), 2)
+    coords[:, 1] .= Float32.(features_df[!, cx])
+    coords[:, 2] .= Float32.(features_df[!, cy])
 
-    # Apply the element-level coordinate transform (local → global).
-    n_coord = length(coord_cols)
-    scales  = _parse_element_scale(meta, n_coord)
-    if any(!=(1.0), scales)
-        for (i, s) in enumerate(scales)
-            s == 1.0 && continue
-            coords[:, i] .*= Float32(s)
-        end
+    # Apply element-level coordinate transform
+    scales = _parse_element_scale(meta, length(coord_cols))
+    for (i, s) in enumerate(scales)
+        s == 1.0 && continue
+        coords[:, i] .*= Float32(s)
     end
 
-    return SpatialPoints(
-        coords,
-        features_df,
-        Dict{String,Any}("zarr_attrs" => meta, "coord_cols" => coord_cols),
-    )
+    labels   = "label" in all_cols ? Vector{String}(features_df[!, "label"]) : String[]
+    skip     = Set([coord_cols..., "label"])
+    feat_cols = [c for c in all_cols if c ∉ skip]
+    features  = isempty(feat_cols) ? nothing :
+                NamedTuple{Tuple(Symbol.(feat_cols))}(
+                    Tuple(features_df[!, c] for c in feat_cols))
+
+    SpatialPoints{Float32}(coords, labels, features,
+                           Dict{String,Any}("zarr_attrs" => meta))
 end
 
 # ─── Element-level coordinate transform helper ───────────────────────────────

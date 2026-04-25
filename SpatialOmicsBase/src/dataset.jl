@@ -85,9 +85,9 @@ end
 
 _summary_image(img::SpatialImage)    = join(size(img.data), "×") * " $(eltype(img.data))"
 _summary_labels(lbl::SpatialLabels)  = join(size(lbl.data), "×") * " $(eltype(lbl.data))"
-_summary_points(pts::SpatialPoints)  = "$(size(pts.coordinates, 1)) pts × $(ncol(pts.features)) cols"
-_summary_shapes(shp::SpatialShapes{G,D}) where {G,D} =
-    "$(length(shp.shapes)) shapes · $(length(fieldnames(D))) data fields"
+_summary_points(pts::SpatialPoints)  = "$(size(pts.coordinates, 1)) pts, $(length(pts.index)) unique labels"
+_summary_shapes(shp::SpatialShapes) =
+    "$(length(shp.shapes)) shapes · $(length(_meta_keys(shp))) metadata fields"
 _summary_table(tbl::SpatialTable)    = "$(size(tbl.data, 1)) obs × $(size(tbl.data, 2)) vars"
 
 # ---------------------------------------------------------------------------
@@ -141,3 +141,19 @@ tables(ds::SpatialDataset, k::String)   = ds.tables[k]
     metadata(ds)            -> Dict{String, Any}
 """
 metadata(ds::SpatialDataset)            = ds.metadata
+
+"""
+    record_column_map!(ds, element, map) -> ds
+
+Store original column name mappings in `ds.metadata["_column_maps"]`.
+Called by platform readers when they rename input columns to canonical names.
+
+```julia
+record_column_map!(ds, "transcripts", Dict("target"=>"gene", "cell_ID"=>"cell_id"))
+```
+"""
+function record_column_map!(ds::SpatialDataset, element::String, map::Dict{String,String})
+    maps = get!(ds.metadata, "_column_maps", Dict{String,Any}())
+    maps[element] = map
+    return ds
+end

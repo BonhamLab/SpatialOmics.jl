@@ -8,7 +8,6 @@ enabling straightforward parallelisation via ThreadsX.jl and Distributed.jl.
 """
 module SpatialAnalysis
 
-using DataFrames
 using Statistics
 using ThreadsX
 using SpatialOmicsBase

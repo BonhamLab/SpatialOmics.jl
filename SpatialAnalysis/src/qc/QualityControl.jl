@@ -11,7 +11,6 @@ analysis pipelines.
 """
 module QualityControl
 
-using DataFrames
 using Statistics
 using SpatialOmicsBase
 

@@ -13,6 +13,26 @@ New platforms are added by:
 """
 abstract type PlatformReader end
 
+# ---------------------------------------------------------------------------
+# Canonical column schema for transcript SpatialPoints
+#
+# All platform readers MUST normalize to these names before constructing
+# SpatialPoints so that downstream analysis code is platform-agnostic.
+#
+#   gene             — gene / target name (String)
+#   cell_id          — integer cell instance identifier (Int32); links to
+#                      SpatialShapes and SpatialTable via instance_key
+#   cell             — string cell label, if the platform provides one
+#   fov              — field-of-view index (Int32), if applicable
+#   z                — z-plane index or depth (Int8 / Float32), if applicable
+#   cell_compartment — subcellular compartment label (e.g. "Nuclear",
+#                      "Cytoplasm"), if the platform provides one
+#   quality_value    — per-transcript decode quality / confidence score
+#
+# Coordinate columns (x, y) are extracted into the coordinates matrix and
+# do NOT appear in features.
+# ---------------------------------------------------------------------------
+
 """
     read_data(reader::PlatformReader, path::String) -> SpatialDataset
 

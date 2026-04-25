@@ -89,19 +89,16 @@ function write_hdf5(ds::SpatialDataset, path::String)
         if !isempty(ds.points)
             pg = HDF5.create_group(fid, "points")
             for (name, pts) in ds.points
-                g  = HDF5.create_group(pg, name)
+                g = HDF5.create_group(pg, name)
                 g["coordinates"] = Matrix{Float32}(pts.coordinates)
-                fg = HDF5.create_group(g, "features")
-                feat_cols = names(pts.features)
-                for col in feat_cols
-                    _hdf5_write_column(fg, col, pts.features[!, col])
+                g["labels"]      = pts.labels   # Vector{String}; empty if no labels
+                if pts.features !== nothing
+                    fg = HDF5.create_group(g, "features")
+                    for (col, vec) in pairs(pts.features)
+                        _hdf5_write_column(fg, String(col), vec)
+                    end
                 end
-                coord_cols = haskey(pts.metadata, "coord_cols") ?
-                             pts.metadata["coord_cols"] : ["x", "y"]
-                HDF5.write_attribute(g, "coord_cols",
-                    JSON.json(collect(String, coord_cols)))
-                HDF5.write_attribute(g, "feat_cols",  JSON.json(feat_cols))
-                HDF5.write_attribute(g, "metadata",   JSON.json(pts.metadata))
+                HDF5.write_attribute(g, "metadata", JSON.json(pts.metadata))
             end
         end
 
@@ -183,25 +180,19 @@ function read_hdf5(path::String)::SpatialDataset
         # ── points ────────────────────────────────────────────────────────────
         if HDF5.haskey(fid, "points")
             for name in keys(fid["points"])
-                g    = fid["points"][name]
+                g      = fid["points"][name]
                 coords = Matrix{Float32}(Base.read(g["coordinates"]))
-                feat_cols = HDF5.haskey(HDF5.attributes(g), "feat_cols") ?
-                    Vector{String}(JSON.parse(HDF5.read_attribute(g, "feat_cols"))) :
-                    String[]
-                feat_df = DataFrame()
+                labels = HDF5.haskey(g, "labels") ?
+                         Vector{String}(Base.read(g["labels"])) : String[]
+                features = nothing
                 if HDF5.haskey(g, "features")
-                    fg = g["features"]
-                    for col in feat_cols
-                        HDF5.haskey(fg, col) || continue
-                        feat_df[!, col] = _hdf5_read_column(fg[col])
-                    end
+                    fg    = g["features"]
+                    names = Tuple(Symbol.(keys(fg)))
+                    vecs  = Tuple(_hdf5_read_column(fg[String(n)]) for n in names)
+                    features = NamedTuple{names}(vecs)
                 end
-                coord_cols = HDF5.haskey(HDF5.attributes(g), "coord_cols") ?
-                    Vector{String}(JSON.parse(HDF5.read_attribute(g, "coord_cols"))) :
-                    ["x", "y"]
                 pts_meta = _read_json_attr(g, "metadata")
-                pts_meta["coord_cols"] = coord_cols
-                ds[name] = SpatialPoints(coords, feat_df, pts_meta)
+                ds[name] = SpatialPoints{Float32}(coords, labels, features, pts_meta)
             end
         end
 

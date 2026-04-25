@@ -46,6 +46,9 @@ function read_data(reader::XeniumReader, path::String)::SpatialDataset
     # TODO Phase 1: implement full Xenium reader
     # 1. Parse experiment.xenium (JSON) for metadata
     # 2. Read transcripts.parquet -> SpatialPoints
+    #    Xenium columns → canonical: feature_name→gene, cell_id (already),
+    #    overlaps_nucleus→cell_compartment ("Nuclear"/"Cytoplasm"),
+    #    qv→quality_value; coords from x_location/y_location
     # 3. Read cells.parquet -> SpatialTable (obs)
     # 4. Read cell_feature_matrix.h5 -> SpatialTable (expression matrix)
     # 5. Optionally read morphology.ome.tiff -> SpatialImage

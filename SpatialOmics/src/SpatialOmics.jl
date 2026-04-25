@@ -28,11 +28,11 @@ module SpatialOmics
 import SpatialOmicsBase:
     SpatialDataset,
     SpatialElement,
-    SpatialImage, SpatialPoints, SpatialLabels, SpatialShapes, SpatialTable
+    SpatialImage, SpatialPoint, SpatialPoints, SpatialLabels, SpatialShapes, SpatialShape, SpatialTable
 
 export SpatialDataset,
        SpatialElement,
-       SpatialImage, SpatialPoints, SpatialLabels, SpatialShapes, SpatialTable
+       SpatialImage, SpatialPoint, SpatialPoints, SpatialLabels, SpatialShapes, SpatialShape, SpatialTable
 
 # ── Dataset construction and mutation (exported) ──────────────────────────────
 

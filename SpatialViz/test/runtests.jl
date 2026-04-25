@@ -17,17 +17,16 @@ function _make_image(; nc=2, ny=32, nx=48)
 end
 
 function _make_points(; n=20)
-    coords   = rand(Float32, n, 2) .* 100f0
-    features = DataFrame(gene = ["g$i" for i in 1:n])
-    SpatialPoints(coords, features, Dict{String,Any}())
+    df = DataFrame(x = rand(Float32, n) .* 100f0,
+                   y = rand(Float32, n) .* 100f0,
+                   gene = ["g$(i % 3)" for i in 1:n])
+    SpatialPoints(df; x_col=:x, y_col=:y, label_col=:gene)
 end
 
 function _make_shapes()
     # Closed rings — first point repeated as last; required by GeometryOps centroid.
-    polys = Vector{Any}([
-        Polygon([Point2f(i, j), Point2f(i+2, j), Point2f(i+1, j+2), Point2f(i, j)])
-        for i in 0:5:15 for j in 0:5:15
-    ])
+    polys = [Polygon([Point2f(i, j), Point2f(i+2, j), Point2f(i+1, j+2), Point2f(i, j)])
+             for i in 0:5:15 for j in 0:5:15]
     n = length(polys)
     SpatialShapes(polys, DataFrame(id=1:n), Dict{String,Any}())
 end
@@ -207,6 +206,21 @@ end
         fig = Figure()
         ax  = Axis(fig[1,1])
         @test_nowarn poly!(ax, shp; color=:transparent, strokecolor=:white)
+    end
+
+    @testset "text! — SpatialShapes names at centroids" begin
+        shp = _make_shapes()
+        fig = Figure()
+        ax  = Axis(fig[1,1])
+        @test_nowarn text!(ax, shp; fontsize=8)
+    end
+
+    @testset "text! — SpatialShape single shape" begin
+        poly = Polygon([Point2f(0,0), Point2f(2,0), Point2f(1,2), Point2f(0,0)])
+        s    = SpatialShape(poly, "my_roi")
+        fig  = Figure()
+        ax   = Axis(fig[1,1])
+        @test_nowarn text!(ax, s)
     end
 
 end

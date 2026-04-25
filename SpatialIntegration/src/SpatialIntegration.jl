@@ -9,7 +9,6 @@ reference atlases.
 """
 module SpatialIntegration
 
-using DataFrames
 using SpatialOmicsBase
 using SpatialAnalysis
 

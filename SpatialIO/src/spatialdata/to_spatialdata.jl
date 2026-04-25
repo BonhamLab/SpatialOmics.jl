@@ -123,20 +123,16 @@ end
 
 function _write_sd_points(path::String, pts::SpatialPoints)
     mkpath(path)
-    group_attrs = _zarr_group_attrs(pts.metadata)
-    _zwrite_group(path, group_attrs)
+    _zwrite_group(path, _zarr_group_attrs(pts.metadata))
 
-    coord_cols = haskey(pts.metadata, "coord_cols") ?
-                 String.(pts.metadata["coord_cols"]) : ["x", "y"]
-    D = size(pts.coordinates, 2)
-    coord_cols = coord_cols[1:min(length(coord_cols), D)]
-
-    # Build DataFrame: coordinates + features (features may be a lazy table)
-    df = DataFrame(pts.coordinates, coord_cols)
-    for col in Tables.columnnames(pts.features)
-        df[!, String(col)] = Tables.getcolumn(pts.features, col)
+    df = DataFrame(x = Float32.(pts.coordinates[:, 1]),
+                   y = Float32.(pts.coordinates[:, 2]))
+    isempty(pts.labels) || (df[!, "label"] = pts.labels)
+    if pts.features !== nothing
+        for (col, vec) in pairs(pts.features)
+            df[!, String(col)] = vec
+        end
     end
-
     Parquet2.writefile(joinpath(path, "points.parquet"), df)
 end
 
@@ -171,7 +167,7 @@ end
 
 # ─── Shapes writer ────────────────────────────────────────────────────────────
 
-function _write_sd_shapes(path::String, shp::SpatialShapes{G,D}) where {G,D}
+function _write_sd_shapes(path::String, shp::SpatialShapes)
     mkpath(path)
     group_attrs = _zarr_group_attrs(shp.metadata)
     _zwrite_group(path, group_attrs)
