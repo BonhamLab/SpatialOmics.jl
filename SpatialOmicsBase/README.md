@@ -1,3 +1,0 @@
-# SpatialOmicsBase.jl
-
-SpatialOmicsBase.jl is the core data-structures package of the SpatialOmics.jl monorepo. It defines the `SpatialDataset{T}` container — a unified, SpatialData-specification-compatible structure holding dictionaries of `SpatialImage`, `SpatialPoints`, `SpatialLabels`, `SpatialShapes`, and `SpatialTable` elements — together with explicit coordinate systems and affine transformations. Large arrays are handled lazily through DiskArrays.jl and Zarr.jl so that datasets with millions of transcripts or gigapixel images are never eagerly loaded into RAM; all other packages in the framework depend on the types defined here.

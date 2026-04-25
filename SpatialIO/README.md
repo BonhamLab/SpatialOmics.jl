@@ -1,3 +1,0 @@
-# SpatialIO.jl
-
-SpatialIO.jl is the platform I/O layer of the SpatialOmics.jl monorepo. It provides a pluggable `PlatformReader` abstraction with concrete implementations for 10x Genomics Xenium, 10x Genomics Visium (SpaceRanger), NanoString CosMx SMI, and Vizgen MERFISH, as well as round-trip interoperability with the Python SpatialData ecosystem via a native Zarr.jl backend. All readers return `SpatialDataset` objects defined in SpatialOmicsBase.jl, and additional utilities cover low-level Parquet, HDF5 (10x feature-barcode matrix), CSV, AnnData, and GeoJSON formats. A PythonCall bridge for full SpatialData spec compliance is planned for SpatialIntegration.jl (Phase 3).

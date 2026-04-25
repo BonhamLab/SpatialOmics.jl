@@ -1,107 +1,49 @@
-"""
-    SpatialOmics
-
-User-facing umbrella package for the spatial transcriptomics ecosystem.
-
-## Two-tier API
-
-**Tier 1 — types and data manipulation** (`using SpatialOmics`):
-Core types and dataset mutation functions are exported and land directly in
-scope.
-
-**Tier 2 — I/O** (`import SpatialOmics as SO`):
-All I/O is available as qualified names only — nothing in tier 2 is exported.
-
-```julia
-using SpatialOmics          # SpatialDataset, images, points, ds["key"] = el, …
-import SpatialOmics as SO   # SO.load, SO.CosMx, SO.read, SO.write, SO.Zarr, …
-
-ds = SO.load(SO.CosMxReader(), "/data/my_experiment/")
-SO.write(ds, "/out/experiment.zarr", SO.Zarr())
-ds2 = SO.read(SO.Zarr(), "/out/experiment.zarr")
-```
-"""
 module SpatialOmics
 
-# ── Core data structures (exported) ──────────────────────────────────────────
+using GeometryBasics: Point, Point2f, Polygon, AbstractGeometry
+using GeoInterface
+using Tables
+using StaticArrays
+using OrderedCollections
+using GeometryOps
+using Zarr
+using JSON3
+using ImageBase: restrict
 
-import SpatialOmicsBase:
-    SpatialDataset,
-    SpatialElement,
-    SpatialImage, SpatialPoint, SpatialPoints, SpatialLabels, SpatialShapes, SpatialShape, SpatialTable
-
-export SpatialDataset,
-       SpatialElement,
-       SpatialImage, SpatialPoint, SpatialPoints, SpatialLabels, SpatialShapes, SpatialShape, SpatialTable
-
-# ── Dataset construction and mutation (exported) ──────────────────────────────
-
-import SpatialOmicsBase:
-    spatial_dataset,
-    images, labels, points, shapes, tables, metadata,
-    channels, channels!,
-    add_roi!
-
-export spatial_dataset,
-       images, labels, points, shapes, tables, metadata,
-       channels, channels!,
-       add_roi!
-
-# ── Coordinate systems and transformations (exported) ─────────────────────────
-
-import SpatialOmicsBase:
-    CoordinateSystem, Transformation,
-    AffineTransformation, IdentityTransformation,
-    transform_coordinates, compose_transformations, invert_transformation
-
-export CoordinateSystem, Transformation,
-       AffineTransformation, IdentityTransformation,
-       transform_coordinates, compose_transformations, invert_transformation
-
-# ── Spatial query primitives (exported) ───────────────────────────────────────
-
-import SpatialOmicsBase:
-    SpatialExtent,
+export
+    # Coordinate systems
+    CoordinateSystem,
+    # Transformations
+    AbstractTransformation,
+    Identity, Affine, Sequence,
+    translation, scaling, rotation, flip_y, compose,
+    apply, apply!, resolve_transform,
+    # Dataset
+    BackingStore, SpatialDataset,
+    coord_systems, transform,
+    with_dataset, keep!,
+    # Elements
+    SpatialPoints, SpatialShapes,
+    points, shapes,
+    coords, features, feature_ids, coord_system,
+    geometries, bbox,
+    # Views
+    SpatialExtent, SpatialROI,
     SpatialElementView, SpatialDatasetView,
-    extent, intersects, crop,
-    region, region_key, instance_key,
-    ImagePyramidSampler
+    geometry,
+    # Images
+    SpatialImage,
+    data, nchannels, channel_names, build_pyramid!, images,
+    # I/O
+    SpatialDataZarr
 
-export SpatialExtent,
-       SpatialElementView, SpatialDatasetView,
-       extent, intersects, crop,
-       region, region_key, instance_key,
-       ImagePyramidSampler
+include("coordsystems.jl")
+include("dataset.jl")
+include("elements.jl")
+include("images.jl")
+include("views.jl")
+include("zarr_io.jl")
+include("show.jl")
 
-# ── Tier 2 — spatial operations (unexported/public) ──────────────────────────
-# Use qualified: SO.filter(roi, key)
-import SpatialOmicsBase: filter
-public filter
 
-# ── Tier 2 — I/O platform loaders (unexported/public) ────────────────────────
-import SpatialIO:
-    PlatformReader,
-    XeniumReader, VisiumReader, CosMxReader, MerfishReader,
-    validate_path, read_data, load_spatial_data, load,
-    load_xenium, load_visium, load_merfish
-
-public PlatformReader
-public XeniumReader, VisiumReader, CosMxReader, MerfishReader
-public validate_path, read_data, load_spatial_data, load
-public load_xenium, load_visium, load_merfish
-
-# ── Tier 2 — I/O format tokens (unexported/public) ───────────────────────────
-import SpatialIO:
-    StorageFormat,
-    Zarr, NativeH5, AnnData, GeoJSON,
-    TranscriptsParquet, CellsParquet, CellFeatureMatrixH5, TissuePositionsCSV
-
-public StorageFormat
-public Zarr, NativeH5, AnnData, GeoJSON
-public TranscriptsParquet, CellsParquet, CellFeatureMatrixH5, TissuePositionsCSV
-
-# ── Tier 2 — I/O read/write (unexported/public) ──────────────────────────────
-import SpatialIO: read, write
-public read, write
-
-end # module SpatialOmics
+end

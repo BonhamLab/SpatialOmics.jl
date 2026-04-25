@@ -1,13 +1,33 @@
 name = "SpatialOmics"
-uuid = "7c9a2e4e-7629-4232-91bd-868b4649c1ff"
-version = "0.1.0"
-authors = []
+uuid = "7c9a2e4e-8f1d-4a6b-b84c-3e8a9f2d1c5e"
+version = "0.2.0"
+authors = ["Kevin Bonham <dev@bonham.ch>"]
 
 [deps]
-Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
-SpatialIO = "d639b19a-202c-43f8-bdd7-6eb317ea560a"
-SpatialOmicsBase = "fc95849c-1493-4666-a0c4-8e4886e585c0"
+GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
+GeometryBasics = "5c1252a2-5f33-56bf-86c9-59e7332b4326"
+GeometryOps = "3251bfac-6a57-4b6d-aa61-ac1fef2975ab"
+ImageBase = "c817782e-172a-44cc-b673-b171935fbb9e"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+OrderedCollections = "bac558e1-5e72-5ebc-8fee-abe8a469f55d"
+StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
+Zarr = "0a941bbe-ad1d-11e8-39d9-ab76183a1d99"
 
 [compat]
-Documenter = "1.17.0"
-julia = "1.12"
+GeoInterface = "1.6.1"
+GeometryBasics = "0.5.10"
+GeometryOps = "0.1.40"
+ImageBase = "0.1.7"
+JSON3 = "1.14.3"
+OrderedCollections = "1"
+StaticArrays = "1"
+Tables = "1.12.1"
+Zarr = "0.10.0"
+julia = "1.10"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]

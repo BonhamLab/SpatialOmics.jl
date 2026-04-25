@@ -1,5 +1,0 @@
-# SpatialIntegration.jl
-
-SpatialIntegration.jl is the cross-dataset harmonization and reference-mapping layer of the SpatialOmics.jl monorepo. It provides three groups of functionality: (1) harmonization — merging multiple `SpatialDataset` objects from different experiments or platforms via `harmonize_datasets()`, spatial coordinate registration via `align_coordinate_systems()`, and gene-name standardization via `standardize_features()`; (2) reference mapping — projecting query datasets onto annotated single-cell atlases with `integrate_reference()`, transferring cell-type labels with `transfer_labels()`, and deconvoluting bulk-like spots with `deconvolute_spots()`; and (3) multi-modal integration — computing joint low-dimensional embeddings across omics layers with `integrate_modalities()` and `joint_embedding()`. The package depends on SpatialOmicsBase.jl for data types and SpatialAnalysis.jl for upstream preprocessing utilities. PythonCall.jl (spatialdata bridge) and RCall.jl (Seurat bridge) belong here, not in SpatialIO.jl.
-
-**Status: stub — deferred to Phase 3.**
