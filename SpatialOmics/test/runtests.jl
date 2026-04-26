@@ -777,3 +777,188 @@ end
     end
 
 end
+
+@testset "SpatialOmics M6" begin
+
+    using Logging
+
+    # ── shared fixtures ────────────────────────────────────────────────────────
+    Random.seed!(42)
+    n_cells = 50
+    n_genes = 4
+    genes   = ["Actb", "Gapdh", "Col1a1", "Vim"]
+
+    cells = SpatialShapes(
+        [let cx = Float32(rand()*800+100), cy = Float32(rand()*800+100)
+             Polygon([Point2f(cx-30,cy-30), Point2f(cx+30,cy-30),
+                      Point2f(cx+30,cy+30), Point2f(cx-30,cy+30),
+                      Point2f(cx-30,cy-30)])
+         end for _ in 1:n_cells];
+        instance_id=Int32.(1:n_cells), coord_system="global_px")
+
+    X   = rand(Float32, n_cells, n_genes)
+    tbl = SpatialTable(X;
+                       obs          = (instance_id=Int32.(1:n_cells),),
+                       var          = (name=genes,),
+                       region       = "cells",
+                       instance_key = :instance_id,
+                       region_kind  = :shapes)
+
+    # ── SpatialTable construction ──────────────────────────────────────────────
+
+    @testset "SpatialTable construction" begin
+        @test nobs(tbl) == n_cells
+        @test nvar(tbl) == n_genes
+        @test var_names(tbl) == genes
+        @test tbl.region == "cells"
+        @test tbl.instance_key == :instance_id
+        @test tbl.region_kind == :shapes
+    end
+
+    @testset "SpatialTable show" begin
+        s = sprint(show, tbl)
+        @test contains(s, "SpatialTable")
+        @test contains(s, string(n_cells))
+        @test contains(s, "cells")
+    end
+
+    # ── feature API — full dataset ─────────────────────────────────────────────
+
+    @testset "feature on full dataset" begin
+        ds = SpatialDataset()
+        try
+            ds["cells"] = cells
+            ds["expr"]  = tbl
+            vals = feature(ds, "Actb"; region="cells")
+            @test length(vals) == n_cells
+            # values come back in shape order (same as cells.instance_id order)
+            actb_col = findfirst(==("Actb"), genes)
+            @test vals ≈ [X[i, actb_col] for i in 1:n_cells]
+        finally
+            close(ds)
+        end
+    end
+
+    @testset "feature error on missing gene" begin
+        ds = SpatialDataset()
+        try
+            ds["cells"] = cells; ds["expr"] = tbl
+            @test_throws ErrorException feature(ds, "NotAGene"; region="cells")
+        finally
+            close(ds)
+        end
+    end
+
+    # ── feature API — ROI view ─────────────────────────────────────────────────
+
+    @testset "feature on dataset view" begin
+        ds = SpatialDataset()
+        try
+            ds["cells"] = cells; ds["expr"] = tbl
+            ext  = SpatialExtent(0, 500, 0, 500; coord_system="global_px")
+            dsv  = view(ds, ext)
+
+            vals = feature(dsv, "Gapdh"; region="cells")
+            shpv = shapes(dsv, "cells")
+            @test length(vals) == length(shpv)   # same count as shapes in ROI
+
+            # values match expectation: filter cells by bbox, look up Gapdh column
+            gapdh_col = findfirst(==("Gapdh"), genes)
+            mask = [cells.bbox[i,1] <= 500 && cells.bbox[i,2] >= 0 &&
+                    cells.bbox[i,3] <= 500 && cells.bbox[i,4] >= 0
+                    for i in 1:n_cells]
+            ids_in = cells.instance_id[mask]
+            expected = [X[i, gapdh_col] for i in ids_in]
+            @test vals ≈ expected
+        finally
+            close(ds)
+        end
+    end
+
+    # ── passthrough accessors on SpatialElementView ────────────────────────────
+
+    @testset "geometries on SpatialElementView" begin
+        ext  = SpatialExtent(0, 500, 0, 500; coord_system="global_px")
+        v    = view(cells, ext)
+        geoms = geometries(v)
+        @test length(geoms) == length(v)
+        @test geoms isa Vector
+    end
+
+    @testset "instance_ids on SpatialElementView" begin
+        ext = SpatialExtent(0, 500, 0, 500; coord_system="global_px")
+        v   = view(cells, ext)
+        ids = instance_ids(v)
+        @test length(ids) == length(v)
+        @test ids isa Vector{Int32}
+    end
+
+    # ── SpatialLabels ──────────────────────────────────────────────────────────
+
+    @testset "SpatialLabels construction" begin
+        data = zeros(Int32, 64, 64)
+        data[10:30, 10:30] .= 1
+        data[40:60, 40:60] .= 2
+        lbl  = SpatialLabels(data;
+                              instance_map=Dict{Int32,Int32}(1=>1, 2=>2),
+                              coord_system="global_px")
+        @test lbl.axes == (:y, :x)
+        @test coord_system(lbl) == "global_px"
+        @test length(instance_ids(lbl)) == 2
+        @test size(lbl) == (64, 64)
+    end
+
+    # ── Zarr round-trip ────────────────────────────────────────────────────────
+
+    @testset "SpatialTable zarr roundtrip" begin
+        path = mktempdir()
+        try
+            ds = SpatialDataset()
+            ds["cells"] = cells; ds["expr"] = tbl
+            with_logger(SimpleLogger(stderr, Logging.Error)) do
+                write(ds, path, SpatialDataZarr())
+            end
+            close(ds)
+
+            ds2 = with_logger(SimpleLogger(stderr, Logging.Error)) do
+                read(SpatialDataZarr(), path)
+            end
+            tbl2 = tables(ds2, "expr")
+            @test nobs(tbl2) == n_cells
+            @test nvar(tbl2) == n_genes
+            @test var_names(tbl2) == genes
+            @test tbl2.region == "cells"
+            @test tbl2.X ≈ X   atol=1e-5
+            close(ds2)
+        finally
+            rm(path; recursive=true, force=true)
+        end
+    end
+
+    @testset "SpatialLabels zarr roundtrip" begin
+        path = mktempdir()
+        try
+            data = rand(Int32.(0:5), 32, 32)
+            lbl  = SpatialLabels(data;
+                                  instance_map=Dict{Int32,Int32}(i=>i for i in 1:5),
+                                  coord_system="global_px")
+            ds = SpatialDataset(); ds["seg"] = lbl
+            with_logger(SimpleLogger(stderr, Logging.Error)) do
+                write(ds, path, SpatialDataZarr())
+            end
+            close(ds)
+
+            ds2 = with_logger(SimpleLogger(stderr, Logging.Error)) do
+                read(SpatialDataZarr(), path)
+            end
+            lbl2 = labels(ds2, "seg")
+            @test size(lbl2.data) == (32, 32)
+            @test lbl2.data == data
+            @test coord_system(lbl2) == "global_px"
+            close(ds2)
+        finally
+            rm(path; recursive=true, force=true)
+        end
+    end
+
+end

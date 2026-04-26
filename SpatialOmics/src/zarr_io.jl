@@ -226,17 +226,109 @@ function _read_image_zarr(grp::String)
     img
 end
 
+# ── Write SpatialLabels ────────────────────────────────────────────────────────
+
+function _write_zarr(root::String, name::String, lbl::SpatialLabels{T}) where T
+    grp = joinpath(root, "labels", name)
+    mkpath(grp)
+    _write_group_meta(grp, Dict(
+        "_spatialdata_attrs" => Dict(
+            "type"         => "labels",
+            "axes"         => collect(string.(lbl.axes)),
+            "coord_system" => lbl.coord_system,
+            "pixel_to_cs"  => _transform_to_dict(lbl.pixel_to_cs))))
+    _write_zarr_array(grp, "data", lbl.data)
+    open(joinpath(grp, "instance_map.json"), "w") do io
+        JSON3.write(io, Dict(string(k) => v for (k, v) in lbl.instance_map))
+    end
+end
+
+# ── Read SpatialLabels ─────────────────────────────────────────────────────────
+
+function _read_labels_zarr(grp::String)
+    meta  = JSON3.read(read(joinpath(grp, "zarr.json"), String))
+    attrs = meta["attributes"]["_spatialdata_attrs"]
+    ax    = Tuple(Symbol.(attrs["axes"]))
+    cs    = attrs["coord_system"]
+    p2cs  = _transform_from_dict(attrs["pixel_to_cs"])
+    N     = length(ax)
+
+    raw  = zopen(joinpath(grp, "data"), "r"; zarr_format=3)
+    data = N == 2 ? raw[:, :] : raw[:, :, :]
+    T    = eltype(data)
+
+    imap_path = joinpath(grp, "instance_map.json")
+    instance_map = if isfile(imap_path)
+        d = JSON3.read(read(imap_path, String))
+        Dict{T, Int32}(parse(T, string(k)) => Int32(v) for (k, v) in d)
+    else
+        Dict{T, Int32}()
+    end
+
+    SpatialLabels(data; axes=ax, instance_map, coord_system=cs, pixel_to_cs=p2cs)
+end
+
+# ── Write SpatialTable ─────────────────────────────────────────────────────────
+
+function _write_zarr(root::String, name::String, tbl::SpatialTable)
+    grp = joinpath(root, "tables", name)
+    mkpath(grp)
+    _write_group_meta(grp, Dict(
+        "_spatialdata_attrs" => Dict(
+            "type"         => "table",
+            "region"       => tbl.region === nothing ? "" : tbl.region,
+            "region_key"   => string(tbl.region_key),
+            "instance_key" => string(tbl.instance_key),
+            "region_kind"  => string(tbl.region_kind))))
+    _write_zarr_array(grp, "X", Matrix{Float32}(tbl.X))
+    open(joinpath(grp, "obs.json"), "w") do io
+        JSON3.write(io, Dict(string(k) => collect(v) for (k, v) in pairs(tbl.obs)))
+    end
+    open(joinpath(grp, "var.json"), "w") do io
+        JSON3.write(io, Dict(string(k) => collect(v) for (k, v) in pairs(tbl.var)))
+    end
+end
+
+# ── Read SpatialTable ──────────────────────────────────────────────────────────
+
+function _read_json_table(path::String)
+    isfile(path) || return NamedTuple()
+    d = JSON3.read(read(path, String))
+    isempty(d) && return NamedTuple()
+    cols = Tuple(Symbol.(keys(d)))
+    vals = Tuple(collect(d[k]) for k in keys(d))
+    NamedTuple{cols}(vals)
+end
+
+function _read_table_zarr(grp::String)
+    meta  = JSON3.read(read(joinpath(grp, "zarr.json"), String))
+    attrs = meta["attributes"]["_spatialdata_attrs"]
+    region_str   = String(get(attrs, "region", ""))
+    region       = isempty(region_str) ? nothing : region_str
+    region_key   = Symbol(attrs["region_key"])
+    instance_key = Symbol(attrs["instance_key"])
+    region_kind  = Symbol(attrs["region_kind"])
+
+    raw = zopen(joinpath(grp, "X"), "r"; zarr_format=3)
+    X   = raw[:, :]
+    obs = _read_json_table(joinpath(grp, "obs.json"))
+    var = _read_json_table(joinpath(grp, "var.json"))
+
+    SpatialTable(X; obs, var, region, region_key, instance_key, region_kind)
+end
+
 # ── Dataset write ──────────────────────────────────────────────────────────────
 
 function Base.write(ds::SpatialDataset, path::String, ::SpatialDataZarr)
     mkpath(path)
     _init_zarr_root(path)
-    for subdir in ("points", "shapes", "images")
+    for subdir in ("points", "shapes", "images", "labels", "tables")
         mkpath(joinpath(path, subdir))
         _write_group_meta(joinpath(path, subdir))
     end
     for (name, el) in ds.elements
-        if el isa SpatialPoints || el isa SpatialShapes || el isa SpatialImage
+        if el isa SpatialPoints || el isa SpatialShapes || el isa SpatialImage ||
+           el isa SpatialLabels || el isa SpatialTable
             _write_zarr(path, name, el)
         end
     end
@@ -271,7 +363,9 @@ function Base.read(::SpatialDataZarr, path::String) :: SpatialDataset
 
     for (subdir, reader) in (("points", _read_points_zarr),
                               ("shapes", _read_shapes_zarr),
-                              ("images", _read_image_zarr))
+                              ("images", _read_image_zarr),
+                              ("labels", _read_labels_zarr),
+                              ("tables", _read_table_zarr))
         for name in _zarr_element_names(path, subdir)
             ds.elements[name] = reader(joinpath(path, subdir, name))
         end
@@ -294,6 +388,7 @@ _element_bytes(pts::SpatialPoints{T}) where T =
 _element_bytes(shp::SpatialShapes) =
     sizeof(Float64) * 4 * length(shp)   # bbox rows as rough lower bound
 
+_element_bytes(tbl::SpatialTable) = sizeof(eltype(tbl.X)) * length(tbl.X)
 _element_bytes(::Any) = 0
 
 function _spill_element!(bs::BackingStore, name::String, el)

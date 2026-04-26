@@ -60,10 +60,38 @@ function build_pyramid!(img::SpatialImage, n_levels::Int=3)
     img
 end
 
-# ── Dataset typed accessor ─────────────────────────────────────────────────────
+# ── SpatialLabels ─────────────────────────────────────────────────────────────
+
+struct SpatialLabels{T<:Integer, N}
+    data         :: AbstractArray{T, N}
+    axes         :: NTuple{N, Symbol}
+    instance_map :: Dict{T, Int32}       # pixel label → canonical instance_id
+    coord_system :: String
+    pixel_to_cs  :: AbstractTransformation
+end
+
+function SpatialLabels(data::AbstractArray{T, N};
+                       axes         = _default_image_axes(N),
+                       instance_map = Dict{T, Int32}(),
+                       coord_system = "",
+                       pixel_to_cs  = Identity("pixel", coord_system)) where {T<:Integer, N}
+    SpatialLabels{T, N}(data, NTuple{N, Symbol}(axes), instance_map, coord_system, pixel_to_cs)
+end
+
+coord_system(lbl::SpatialLabels)  = lbl.coord_system
+instance_ids(lbl::SpatialLabels)  = sort(unique(values(lbl.instance_map)))
+Base.size(lbl::SpatialLabels)     = size(lbl.data)
+
+# ── Dataset typed accessors ────────────────────────────────────────────────────
 
 function images(ds::SpatialDataset, name::String)
     el = ds.elements[name]
     el isa SpatialImage || error("Element \"$name\" is not SpatialImage (got $(typeof(el)))")
+    el
+end
+
+function labels(ds::SpatialDataset, name::String)
+    el = ds.elements[name]
+    el isa SpatialLabels || error("Element \"$name\" is not SpatialLabels (got $(typeof(el)))")
     el
 end

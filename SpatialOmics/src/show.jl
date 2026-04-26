@@ -34,6 +34,18 @@ function Base.show(io::IO, roi::SpatialROI{G}) where G
     print(io, "SpatialROI{$(nameof(G))}(x=$(ext.xmin)..$(ext.xmax), y=$(ext.ymin)..$(ext.ymax))$cs")
 end
 
+function Base.show(io::IO, lbl::SpatialLabels{T}) where T
+    sz = join(size(lbl.data), "×")
+    ni = length(lbl.instance_map)
+    cs = isempty(lbl.coord_system) ? "" : " [$(lbl.coord_system)]"
+    print(io, "SpatialLabels{$T}: $sz, $ni instances$cs")
+end
+
+function Base.show(io::IO, tbl::SpatialTable)
+    reg = tbl.region === nothing ? "unlinked" : "→ \"$(tbl.region)\""
+    print(io, "SpatialTable: $(nobs(tbl)) obs × $(nvar(tbl)) var ($reg)")
+end
+
 function Base.show(io::IO, img::SpatialImage{T}) where T
     sz  = join(size(img.data), "×")
     nc  = nchannels(img)

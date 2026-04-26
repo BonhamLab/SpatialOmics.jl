@@ -159,3 +159,51 @@ Base.length(v::SpatialElementView) = count(_mask(v.parent, v.roi, v.overlap))
 
 coord_system(v::SpatialElementView) = coord_system(v.parent)
 coord_system(v::SpatialDatasetView) = coord_system(v.roi)
+
+features(v::SpatialElementView{<:SpatialPoints})     = v.parent.feature_codebook
+
+geometries(v::SpatialElementView{<:SpatialShapes}) =
+    v.parent.geometries[_mask(v.parent, v.roi, v.overlap)]
+
+coords(v::SpatialElementView{<:SpatialPoints}) =
+    v.parent.coords[_mask(v.parent, v.roi, v.overlap)]
+
+instance_ids(v::SpatialElementView{<:SpatialShapes}) =
+    v.parent.instance_id[_mask(v.parent, v.roi, v.overlap)]
+
+instance_ids(v::SpatialElementView{<:SpatialPoints}) =
+    v.parent.instance_id[_mask(v.parent, v.roi, v.overlap)]
+
+# ── typed accessors on SpatialDatasetView ─────────────────────────────────────
+
+function labels(v::SpatialDatasetView, name::String)
+    el = v.parent.elements[name]
+    el isa SpatialLabels || error("Element \"$name\" is not SpatialLabels (got $(typeof(el)))")
+    el    # labels are rasters — no spatial element view; return as-is
+end
+
+function tables(v::SpatialDatasetView, name::String)
+    el = v.parent.elements[name]
+    el isa SpatialTable || error("Element \"$name\" is not SpatialTable (got $(typeof(el)))")
+    el    # table filtering is driven by feature(); return as-is
+end
+
+# ── feature API — ROI-filtered (values in shape order within ROI) ──────────────
+
+function feature(dsv::SpatialDatasetView, gene::String; region::String)
+    shape_el = dsv.parent.elements[region]
+    shape_el isa SpatialShapes || error("Element \"$region\" is not SpatialShapes")
+    mask        = _mask(shape_el, dsv.roi, :any)
+    ids_ordered = shape_el.instance_id[mask]
+
+    for (_, el) in dsv.parent.elements
+        el isa SpatialTable || continue
+        el.region == region || continue
+        idx = findfirst(==(gene), var_names(el))
+        idx === nothing && error("Gene \"$gene\" not found in table linked to \"$region\"")
+        obs_ids   = _obs_instance_ids(el)
+        id_to_row = Dict(id => i for (i, id) in enumerate(obs_ids))
+        return [el.X[id_to_row[id], idx] for id in ids_ordered]
+    end
+    error("No SpatialTable linked to element \"$region\"")
+end
