@@ -7,7 +7,9 @@ using StaticArrays
 using OrderedCollections
 using GeometryOps
 using Zarr
-using JSON3
+using JSON
+using Parquet2
+using CSV
 using ImageBase: restrict
 
 export
@@ -38,7 +40,8 @@ export
     SpatialTable,
     tables, nobs, nvar, var_names, feature,
     # I/O
-    SpatialDataZarr
+    SpatialDataZarr,
+    CosMx
 
 include("coordsystems.jl")
 include("dataset.jl")

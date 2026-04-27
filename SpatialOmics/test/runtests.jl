@@ -961,4 +961,158 @@ end
         end
     end
 
+end  # M6
+
+@testset "SpatialOmics M7" begin
+
+    using Random, GeometryBasics, Logging
+
+    @testset "Round-trip — all element kinds" begin
+        path = mktempdir(; prefix="so_m7_roundtrip_")
+        try
+            Random.seed!(1)
+            genes = ["Actb", "Gapdh", "Col1a1"]
+            n = 20
+
+            pts = SpatialPoints(
+                [Point2f(rand()*100, rand()*100) for _ in 1:n];
+                feature_id       = Int32.(rand(1:3, n)),
+                feature_codebook = genes,
+                instance_id      = zeros(Int32, n),
+                coord_system     = "global")
+
+            polys = [let cx=rand()*80+10f0, cy=rand()*80+10f0
+                         Polygon([Point2f(cx-5,cy-5), Point2f(cx+5,cy-5),
+                                  Point2f(cx+5,cy+5), Point2f(cx-5,cy+5),
+                                  Point2f(cx-5,cy-5)])
+                     end for _ in 1:10]
+            shp = SpatialShapes(polys; instance_id=Int32.(1:10), coord_system="global")
+
+            X   = rand(Float32, 10, 3)
+            tbl = SpatialTable(X;
+                obs=(instance_id=Int32.(1:10),), var=(name=genes,),
+                region="cells", instance_key=:instance_id, region_kind=:shapes)
+
+            img = SpatialImage(rand(UInt16, 8, 8, 2);
+                axes=(:y,:x,:c), channel_names=["DAPI","GFP"], coord_system="global")
+
+            data_lbl = Int32.(rand(0:5, 8, 8))
+            lbl = SpatialLabels(data_lbl;
+                instance_map=Dict{Int32,Int32}(i=>i for i in 1:5),
+                coord_system="global")
+
+            ds = SpatialDataset()
+            push!(ds, CoordinateSystem("global"; units=("µm","µm")))
+            ds["transcripts"] = pts
+            ds["cells"]       = shp
+            ds["expression"]  = tbl
+            ds["dapi"]        = img
+            ds["seg"]         = lbl
+
+            with_logger(SimpleLogger(stderr, Logging.Error)) do
+                write(ds, path, SpatialDataZarr())
+            end
+            close(ds)
+
+            ds2 = with_logger(SimpleLogger(stderr, Logging.Error)) do
+                read(SpatialDataZarr(), path)
+            end
+
+            @test haskey(ds2.elements, "transcripts")
+            @test haskey(ds2.elements, "cells")
+            @test haskey(ds2.elements, "expression")
+            @test haskey(ds2.elements, "dapi")
+            @test haskey(ds2.elements, "seg")
+
+            pts2 = points(ds2, "transcripts")
+            @test length(pts2) == n
+            @test features(pts2) == genes
+
+            shp2 = shapes(ds2, "cells")
+            @test length(shp2) == 10
+
+            tbl2 = tables(ds2, "expression")
+            @test nobs(tbl2) == 10
+            @test nvar(tbl2) == 3
+            @test var_names(tbl2) == genes
+            @test tbl2.X ≈ X
+
+            img2 = images(ds2, "dapi")
+            @test nchannels(img2) == 2
+            @test channel_names(img2) == ["DAPI","GFP"]
+
+            lbl2 = labels(ds2, "seg")
+            @test size(lbl2.data) == (8, 8)
+            @test lbl2.data == data_lbl
+
+            close(ds2)
+        finally
+            rm(path; recursive=true, force=true)
+        end
+    end
+
+    xenium_path = "/home/kevin/Repos/stx_dev/test_data/experiments/xenium_ex.zarr"
+    if isdir(xenium_path)
+        @testset "Python SpatialData read — Xenium smoke test" begin
+            ds = with_logger(SimpleLogger(stderr, Logging.Error)) do
+                read(SpatialDataZarr(), xenium_path)
+            end
+
+            @test haskey(ds.elements, "morphology_focus")
+            @test haskey(ds.elements, "cell_labels")
+            @test haskey(ds.elements, "cell_boundaries")
+            @test haskey(ds.elements, "transcripts")
+            @test haskey(ds.elements, "table")
+
+            img = images(ds, "morphology_focus")
+            @test img isa SpatialImage
+            @test nchannels(img) == 4
+            @test length(img.pyramid) >= 1
+
+            shp = shapes(ds, "cell_boundaries")
+            @test length(shp) > 0
+
+            pts = points(ds, "transcripts")
+            @test length(pts) > 0
+            @test length(features(pts)) > 0
+
+            tbl = tables(ds, "table")
+            @test nvar(tbl) == 377
+            @test nobs(tbl) > 0
+        end
+    end
+
+end
+
+@testset "SpatialOmics M8" begin
+
+    cosmx_path = "/home/kevin/Repos/stx_dev/test_data/experiments/cosmx_ex_raw/flatFiles/mw_mus_p1_11"
+    if isdir(cosmx_path)
+        @testset "CosMx reader — smoke test" begin
+            ds = read(CosMx(), cosmx_path)
+
+            @test haskey(ds.elements, "transcripts")
+            @test haskey(ds.elements, "cells")
+
+            pts = points(ds, "transcripts")
+            @test length(pts) > 0
+            @test length(features(pts)) > 0
+            @test coord_system(pts) == "global_px"
+
+            shp = shapes(ds, "cells")
+            @test length(shp) > 0
+            @test coord_system(shp) == "global_px"
+
+            # per-FOV coord systems and transforms registered
+            @test haskey(ds.coord_systems, "global_px")
+            @test any(cs -> startswith(cs, "fov_"), keys(ds.coord_systems))
+            @test any(t -> startswith(t.src, "fov_") && t.dst == "global_px",
+                      ds.transforms)
+
+            ann = ds.metadata["transcripts_annotations"]
+            @test length(ann.fov) == length(pts)
+            @test length(ann.z)   == length(pts)
+        end
+    end
+
 end
