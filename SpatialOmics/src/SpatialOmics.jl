@@ -28,7 +28,7 @@ export
     SpatialPoints, SpatialShapes,
     points, shapes,
     coords, features, feature_ids, coord_system,
-    geometries, bbox, instance_ids,
+    geometries, bbox, instance_id, instance_ids,
     # Views
     SpatialExtent, SpatialROI,
     SpatialElementView, SpatialDatasetView,

@@ -113,7 +113,14 @@ end
 # ── Element attachment placeholder (implemented in elements.jl) ───────────────
 
 function Base.setindex!(ds::SpatialDataset, el, name::String)
+    existing = _owning_dataset(el)
+    if existing !== nothing && existing !== ds
+        error("Element already attached to a different dataset. " *
+              "Use `ds[\"$name\"] = copy(el)` to attach a detached copy. " *
+              "Note: mappings involving this element in the original dataset will not transfer.")
+    end
     _spill_element!(ds.backing, name, el)
+    _set_backref!(el, ds, name)
     ds.elements[name] = el
     ds
 end

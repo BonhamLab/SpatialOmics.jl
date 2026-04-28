@@ -1,5 +1,10 @@
 # ── Pretty REPL display ────────────────────────────────────────────────────────
 
+function Base.show(io::IO, fmt::CosMx)
+    m = fmt.morphology_dir === nothing ? "" : "morphology_dir=$(repr(fmt.morphology_dir))"
+    print(io, "CosMx($m)")
+end
+
 function Base.show(io::IO, cs::CoordinateSystem)
     print(io, "CoordinateSystem(\"$(cs.name)\", $(cs.axes[1])/$(cs.axes[2]), $(cs.units[1])/$(cs.units[2]))")
 end
@@ -69,9 +74,11 @@ end
 
 # Compact inline form — used when ds appears as a field or inside a larger structure
 function Base.show(io::IO, ds::SpatialDataset)
-    n  = length(ds.elements)
-    cs = join(keys(ds.coord_systems), ", ")
-    cs = isempty(cs) ? "" : " [$cs]"
+    n   = length(ds.elements)
+    ncs = length(ds.coord_systems)
+    cs  = ncs == 0 ? "" :
+          ncs <= 3  ? " [$(join(keys(ds.coord_systems), ", "))]" :
+                      " ($ncs coord systems)"
     print(io, "SpatialDataset($n element$(n == 1 ? "" : "s")$cs)")
 end
 
@@ -86,7 +93,13 @@ function Base.show(io::IO, ::MIME"text/plain", ds::SpatialDataset)
         println(io)
     end
     if !isempty(ds.coord_systems)
-        csl = ["\"$(cs.name)\" ($(cs.units[1]))" for cs in values(ds.coord_systems)]
-        print(io, "  coord_systems: ", join(csl, ", "))
+        css  = collect(values(ds.coord_systems))
+        ncs  = length(css)
+        head = join(["\"$(cs.name)\" ($(cs.units[1]))" for cs in css[1:min(3,ncs)]], ", ")
+        tail = ncs > 3 ? " … ($ncs total)" : ""
+        print(io, "  coord_systems: ", head, tail)
+        if !isempty(ds.transforms)
+            print(io, "\n  transforms: $(length(ds.transforms))")
+        end
     end
 end

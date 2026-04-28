@@ -30,7 +30,14 @@ Parquet2 = "0.2.33"
 StaticArrays = "1"
 Tables = "1.12.1"
 Zarr = "0.10.0"
+Makie = "0.21"
 julia = "1.10"
+
+[weakdeps]
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+
+[extensions]
+MakieExt = "Makie"
 
 [extras]
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"

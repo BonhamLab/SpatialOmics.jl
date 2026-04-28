@@ -297,6 +297,27 @@ end
         @test bbox(shp)[1, 1] ≈ 0.0
     end
 
+    @testset "SpatialShapes — iteration and filter" begin
+        rings = [[Point2f(i,0), Point2f(i+1,0), Point2f(i+1,1), Point2f(i,1), Point2f(i,0)]
+                 for i in 0:2]
+        shp = SpatialShapes(Polygon.(rings);
+                            instance_id=Int32[10, 20, 30], coord_system="global")
+
+        @test length(collect(shp)) == 3
+        @test eltype(shp) <: SpatialShape
+
+        row = shp[2]
+        @test row isa SpatialShape
+        @test row.instance_id == Int32(20)
+        @test row.coord_system == "global"
+        @test row.bbox == (1.0, 2.0, 0.0, 1.0)
+
+        kept = filter(s -> s.instance_id in [10, 30], shp)
+        @test length(kept) == 2
+        @test kept.instance_id == Int32[10, 30]
+        @test coord_system(kept) == "global"
+    end
+
     @testset "SpatialShapes — apply! (in-place)" begin
         ring = [Point2f(0,0), Point2f(1,0), Point2f(1,1), Point2f(0,1), Point2f(0,0)]
         shp = SpatialShapes([Polygon(ring)]; coord_system="fov_1")
@@ -354,6 +375,46 @@ end
         @test ext.xmin == 0.0
         @test ext.xmax == 2.0
         @test coord_system(ext) == "global"
+    end
+
+    @testset "SpatialExtent from SpatialShapes" begin
+        rings = [[Point2f(0,0), Point2f(1,0), Point2f(1,1), Point2f(0,1), Point2f(0,0)],
+                 [Point2f(2,2), Point2f(4,2), Point2f(4,5), Point2f(2,5), Point2f(2,2)]]
+        shp = SpatialShapes(Polygon.(rings); instance_id=Int32[1,2], coord_system="global")
+        ext = SpatialExtent(shp)
+        @test ext.xmin == 0.0 && ext.xmax == 4.0
+        @test ext.ymin == 0.0 && ext.ymax == 5.0
+        @test coord_system(ext) == "global"
+
+        # filter then extent — the idiomatic pipeline
+        ext2 = SpatialExtent(filter(s -> s.instance_id == Int32(1), shp))
+        @test ext2.xmax == 1.0
+    end
+
+    @testset "SpatialExtent union" begin
+        a = SpatialExtent(0, 2, 0, 2; coord_system="g")
+        b = SpatialExtent(1, 4, 1, 3; coord_system="g")
+        u = a ∪ b
+        @test u.xmin == 0.0 && u.xmax == 4.0
+        @test u.ymin == 0.0 && u.ymax == 3.0
+        @test coord_system(u) == "g"
+        @test_throws ErrorException SpatialExtent(0,1,0,1;coord_system="a") ∪
+                                    SpatialExtent(0,1,0,1;coord_system="b")
+    end
+
+    @testset "SpatialExtent intersect" begin
+        a = SpatialExtent(0, 3, 0, 3; coord_system="g")
+        b = SpatialExtent(1, 4, 1, 4; coord_system="g")
+        i = a ∩ b
+        @test i isa SpatialExtent
+        @test i.xmin == 1.0 && i.xmax == 3.0
+        @test i.ymin == 1.0 && i.ymax == 3.0
+        # non-overlapping
+        c = SpatialExtent(5, 6, 5, 6; coord_system="g")
+        @test isnothing(a ∩ c)
+        # touching at edge — not an overlap
+        d = SpatialExtent(3, 5, 0, 3; coord_system="g")
+        @test isnothing(a ∩ d)
     end
 
     # ── SpatialROI ─────────────────────────────────────────────────────────────
@@ -885,10 +946,10 @@ end
         @test geoms isa Vector
     end
 
-    @testset "instance_ids on SpatialElementView" begin
+    @testset "instance_id on SpatialElementView" begin
         ext = SpatialExtent(0, 500, 0, 500; coord_system="global_px")
         v   = view(cells, ext)
-        ids = instance_ids(v)
+        ids = instance_id(v)
         @test length(ids) == length(v)
         @test ids isa Vector{Int32}
     end
@@ -1093,6 +1154,7 @@ end
 
             @test haskey(ds.elements, "transcripts")
             @test haskey(ds.elements, "cells")
+            @test haskey(ds.elements, "fovs")
 
             pts = points(ds, "transcripts")
             @test length(pts) > 0
@@ -1108,6 +1170,11 @@ end
             @test any(cs -> startswith(cs, "fov_"), keys(ds.coord_systems))
             @test any(t -> startswith(t.src, "fov_") && t.dst == "global_px",
                       ds.transforms)
+
+            fovshp = shapes(ds, "fovs")
+            n_fovs = length(unique(ds.metadata["transcripts_annotations"].fov))
+            @test length(fovshp) == n_fovs
+            @test coord_system(fovshp) == "global_px"
 
             ann = ds.metadata["transcripts_annotations"]
             @test length(ann.fov) == length(pts)

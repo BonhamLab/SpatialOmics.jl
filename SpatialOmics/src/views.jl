@@ -13,6 +13,31 @@ SpatialExtent(xmin, xmax, ymin, ymax; coord_system::String="") =
 
 coord_system(ext::SpatialExtent) = ext.coord_system
 
+SpatialExtent(shp::SpatialShapes) =
+    SpatialExtent(minimum(shp.bbox[:,1]), maximum(shp.bbox[:,2]),
+                  minimum(shp.bbox[:,3]), maximum(shp.bbox[:,4]);
+                  coord_system = shp.coord_system)
+
+function _check_cs(a::SpatialExtent, b::SpatialExtent)
+    a.coord_system == b.coord_system ||
+        error("coord_system mismatch: \"$(a.coord_system)\" vs \"$(b.coord_system)\"")
+end
+
+function Base.union(a::SpatialExtent, b::SpatialExtent)
+    _check_cs(a, b)
+    SpatialExtent(min(a.xmin, b.xmin), max(a.xmax, b.xmax),
+                  min(a.ymin, b.ymin), max(a.ymax, b.ymax);
+                  coord_system = a.coord_system)
+end
+
+function Base.intersect(a::SpatialExtent, b::SpatialExtent)
+    _check_cs(a, b)
+    xmin, xmax = max(a.xmin, b.xmin), min(a.xmax, b.xmax)
+    ymin, ymax = max(a.ymin, b.ymin), min(a.ymax, b.ymax)
+    xmin < xmax && ymin < ymax || return nothing
+    SpatialExtent(xmin, xmax, ymin, ymax; coord_system = a.coord_system)
+end
+
 # ── SpatialROI ────────────────────────────────────────────────────────────────
 
 struct SpatialROI{G}
@@ -141,7 +166,7 @@ function Base.collect(v::SpatialElementView{<:SpatialPoints})
     p = v.parent
     T = eltype(eltype(p.coords))
     SpatialPoints{T}(p.coords[mask], p.feature_id[mask], copy(p.feature_codebook),
-                     p.instance_id[mask], p.coord_system)
+                     p.instance_id[mask], p.coord_system, nothing)
 end
 
 function Base.collect(v::SpatialElementView{<:SpatialShapes})
@@ -168,10 +193,13 @@ geometries(v::SpatialElementView{<:SpatialShapes}) =
 coords(v::SpatialElementView{<:SpatialPoints}) =
     v.parent.coords[_mask(v.parent, v.roi, v.overlap)]
 
-instance_ids(v::SpatialElementView{<:SpatialShapes}) =
+feature_ids(v::SpatialElementView{<:SpatialPoints}) =
+    v.parent.feature_id[_mask(v.parent, v.roi, v.overlap)]
+
+instance_id(v::SpatialElementView{<:SpatialShapes}) =
     v.parent.instance_id[_mask(v.parent, v.roi, v.overlap)]
 
-instance_ids(v::SpatialElementView{<:SpatialPoints}) =
+instance_id(v::SpatialElementView{<:SpatialPoints}) =
     v.parent.instance_id[_mask(v.parent, v.roi, v.overlap)]
 
 # ── typed accessors on SpatialDatasetView ─────────────────────────────────────

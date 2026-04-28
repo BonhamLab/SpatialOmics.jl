@@ -130,7 +130,7 @@ function _read_points_zarr(grp::String) :: SpatialPoints{Float32}
     meta = JSON.parse(read(joinpath(grp, "zarr.json"), String))
     cs   = meta["attributes"]["_spatialdata_attrs"]["coord_system"]
 
-    SpatialPoints{Float32}(coords, feature_id, codebook, instance_id, cs)
+    SpatialPoints{Float32}(coords, feature_id, codebook, instance_id, cs, nothing)
 end
 
 # ── Read SpatialShapes ─────────────────────────────────────────────────────────
@@ -614,7 +614,52 @@ end
 
 # ── CosMx flatFiles reader ────────────────────────────────────────────────────
 
-struct CosMx end
+Base.@kwdef struct CosMx
+    morphology_dir :: Union{String, Nothing} = nothing
+end
+
+# Locate morphology_cache.zarr. Accepts the zarr path directly or any ancestor dir;
+# searches up to 5 levels deep for a subdir named "morphology_cache.zarr".
+function _find_morphology_zarr(path::String) :: Union{String, Nothing}
+    isdir(path) || return nothing
+    # Direct: path is the zarr group itself
+    isfile(joinpath(path, "zarr.json")) && isdir(joinpath(path, "0")) && return path
+    # BFS up to depth 5 looking for morphology_cache.zarr by name
+    function _search(d::String, depth::Int) :: Union{String, Nothing}
+        depth == 0 && return nothing
+        for entry in readdir(d; join=true)
+            isdir(entry) || continue
+            startswith(basename(entry), ".") && continue
+            basename(entry) == "morphology_cache.zarr" && return entry
+            found = _search(entry, depth - 1)
+            found !== nothing && return found
+        end
+        nothing
+    end
+    _search(path, 5)
+end
+
+function _read_cosmx_morphology(zarr_path::String) :: SpatialImage{Float32}
+    meta   = JSON.parse(read(joinpath(zarr_path, "zarr.json"), String))
+    attrs  = meta["attributes"]
+    ch_names = String.(attrs["channel_names"])
+    x_range  = Float64.(attrs["x_range"])
+    y_range  = Float64.(attrs["y_range"])
+
+    # zarr written C-order (c, y, x); Zarr.jl reverses → (x, y, c)
+    ax   = (:x, :y, :c)
+    p2cs = translation(x_range[1], y_range[1], "pixel", "global_px")
+
+    data = zopen(joinpath(zarr_path, "0"), "r"; zarr_format=3)
+    img  = SpatialImage(data; axes=ax, channel_names=ch_names,
+                        coord_system="global_px", pixel_to_cs=p2cs)
+    i = 1
+    while isdir(joinpath(zarr_path, string(i)))
+        push!(img.pyramid, zopen(joinpath(zarr_path, string(i)), "r"; zarr_format=3))
+        i += 1
+    end
+    img
+end
 
 # Returns the run directory containing tx_file, fov_positions, polygons CSVs.
 # Accepts: the run dir directly, or a parent dir containing a single run dir.
@@ -644,7 +689,7 @@ function _gz_csv(path::String)
     CSV.File(path)   # CSV.jl detects .gz extension and decompresses automatically
 end
 
-function Base.read(::CosMx, path::String) :: SpatialDataset
+function Base.read(fmt::CosMx, path::String) :: SpatialDataset
     run_dir = _cosmx_run_dir(path)
 
     # ── FOV positions ─────────────────────────────────────────────────────────
@@ -660,40 +705,41 @@ function Base.read(::CosMx, path::String) :: SpatialDataset
     # ── Transcripts ───────────────────────────────────────────────────────────
     tx_tbl = _gz_csv(_cosmx_find(run_dir, "_tx_file.csv.gz"))
 
-    all_x    = Float32[]
-    all_y    = Float32[]
-    all_feat = String[]
-    all_inst = Int32[]
-    ann_fov  = Int32[]
-    ann_z    = Float32[]
-    ann_comp = String[]
+    all_x        = Float32[]
+    all_y        = Float32[]
+    all_feat     = String[]
+    ann_fov      = Int32[]
+    ann_z        = Float32[]
+    ann_comp     = String[]
+    ann_cell_id  = Int32[]   # raw per-FOV cell_ID; remapped to global after cells are read
+    fov_max_local = Dict{Int, Tuple{Float32, Float32}}()
 
     for row in tx_tbl
-        push!(all_x,    Float32(row.x_global_px))
-        push!(all_y,    Float32(row.y_global_px))
-        push!(all_feat, String(row.target))
-        push!(all_inst, row.cell_ID === missing ? Int32(0) : Int32(row.cell_ID))
-        push!(ann_fov,  Int32(row.fov))
-        push!(ann_z,    row.z === missing ? Float32(0) : Float32(row.z))
-        push!(ann_comp, row.CellComp === missing ? "" : String(row.CellComp))
+        push!(all_x,       Float32(row.x_global_px))
+        push!(all_y,       Float32(row.y_global_px))
+        push!(all_feat,    String(row.target))
+        push!(ann_fov,     Int32(row.fov))
+        push!(ann_z,       row.z === missing ? Float32(0) : Float32(row.z))
+        push!(ann_comp,    row.CellComp === missing ? "" : String(row.CellComp))
+        push!(ann_cell_id, row.cell_ID === missing ? Int32(0) : Int32(row.cell_ID))
+        f  = Int(row.fov)
+        lx = Float32(row.x_global_px) - Float32(fov_x[f])
+        ly = Float32(fov_y[f]) - Float32(row.y_global_px)
+        prev = get(fov_max_local, f, (0f0, 0f0))
+        fov_max_local[f] = (max(prev[1], lx), max(prev[2], ly))
     end
+
+    fov_w = isempty(fov_max_local) ? 4256f0 : maximum(first, values(fov_max_local))
+    fov_h = isempty(fov_max_local) ? 4256f0 : maximum(last,  values(fov_max_local))
 
     codebook   = sort(unique(all_feat))
     feat_to_id = Dict(g => Int32(i) for (i, g) in enumerate(codebook))
     feat_ids   = Int32[feat_to_id[f] for f in all_feat]
 
-    transcripts = SpatialPoints(
-        [Point2f(all_x[i], all_y[i]) for i in eachindex(all_x)];
-        feature_id       = feat_ids,
-        feature_codebook = codebook,
-        instance_id      = all_inst,
-        coord_system     = "global_px")
-
     # ── Cell polygons ─────────────────────────────────────────────────────────
     poly_tbl = _gz_csv(_cosmx_find(run_dir, "-polygons.csv.gz"))
 
-    # Group vertices by (fov, cellID) preserving order
-    cell_keys  = Pair{Int,Int}[]  # ordered unique (fov, cellID) pairs
+    cell_keys  = Pair{Int,Int}[]
     key_set    = Set{Pair{Int,Int}}()
     vert_map   = Dict{Pair{Int,Int}, Vector{Point2f}}()
 
@@ -707,17 +753,31 @@ function Base.read(::CosMx, path::String) :: SpatialDataset
         push!(vert_map[k], Point2f(Float32(row.x_global_px), Float32(row.y_global_px)))
     end
 
+    # Sequential global IDs: (fov, cellID) → Int32 (1-based, unique across all FOVs)
+    global_id = Dict{Pair{Int,Int}, Int32}(k => Int32(i) for (i, k) in enumerate(cell_keys))
+
     polys = Polygon[]
     inst  = Int32[]
     for (i, k) in enumerate(cell_keys)
         verts = vert_map[k]
-        # ensure closed ring
         first(verts) ≈ last(verts) || push!(verts, verts[1])
         push!(polys, Polygon(verts))
-        push!(inst, Int32(k.second))
+        push!(inst, Int32(i))
     end
 
     cells = SpatialShapes(polys; instance_id=inst, coord_system="global_px")
+
+    # Remap transcript instance_ids now that global_id map is available
+    all_inst = Int32[ann_cell_id[i] == Int32(0) ? Int32(0) :
+                     get(global_id, Int(ann_fov[i]) => Int(ann_cell_id[i]), Int32(0))
+                     for i in eachindex(ann_cell_id)]
+
+    transcripts = SpatialPoints(
+        [Point2f(all_x[i], all_y[i]) for i in eachindex(all_x)];
+        feature_id       = feat_ids,
+        feature_codebook = codebook,
+        instance_id      = all_inst,
+        coord_system     = "global_px")
 
     # ── Assemble dataset ──────────────────────────────────────────────────────
     ds = SpatialDataset()
@@ -738,11 +798,29 @@ function Base.read(::CosMx, path::String) :: SpatialDataset
 
     ds["transcripts"] = transcripts
     ds["cells"]       = cells
+    ds["fovs"]        = SpatialShapes(
+        [let ox = Float32(fov_x[f]), oy = Float32(fov_y[f])
+             Polygon([Point2f(ox,         oy - fov_h),
+                      Point2f(ox + fov_w, oy - fov_h),
+                      Point2f(ox + fov_w, oy),
+                      Point2f(ox,         oy),
+                      Point2f(ox,         oy - fov_h)])
+         end for f in fov_ids];
+        instance_id = Int32.(fov_ids), coord_system = "global_px")
 
     ds.metadata["transcripts_annotations"] = (
         fov      = ann_fov,
         z        = ann_z,
         CellComp = ann_comp)
+
+    if fmt.morphology_dir !== nothing
+        zarr_path = _find_morphology_zarr(fmt.morphology_dir)
+        if zarr_path === nothing
+            @warn "No morphology_cache.zarr found under $(fmt.morphology_dir); skipping morphology"
+        else
+            ds["morphology"] = _read_cosmx_morphology(zarr_path)
+        end
+    end
 
     ds
 end
