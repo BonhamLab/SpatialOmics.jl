@@ -228,6 +228,38 @@ function Base.copy(shp::SpatialShapes{G}) where G
                      shp.coord_system, nothing)
 end
 
+# ── subsample ─────────────────────────────────────────────────────────────────
+
+function subsample(pts::SpatialPoints{T}, n::Int) where T
+    n >= length(pts) && return pts
+    idx = sort!(randperm(length(pts))[1:n])
+    SpatialPoints{T}(pts.coords[idx], pts.feature_id[idx], copy(pts.feature_codebook),
+                     pts.instance_id[idx], pts.coord_system, nothing)
+end
+
+# ── top_features ──────────────────────────────────────────────────────────────
+# Returns gene names sorted by descending transcript count.
+
+function top_features(pts::SpatialPoints, n::Int=10)
+    cb = pts.feature_codebook
+    isempty(cb) && return String[]
+    counts = [count(==(Int32(i)), pts.feature_id) for i in eachindex(cb)]
+    idx    = sortperm(counts; rev=true)[1:min(n, length(cb))]
+    cb[idx]
+end
+
+# ── count_per_instance ────────────────────────────────────────────────────────
+# Returns Dict mapping instance_id → transcript count; 0 (unassigned) excluded.
+
+function count_per_instance(pts::SpatialPoints)
+    counts = Dict{Int32, Int}()
+    for id in pts.instance_id
+        id == Int32(0) && continue
+        counts[id] = get(counts, id, 0) + 1
+    end
+    counts
+end
+
 # ── Typed dataset accessors ───────────────────────────────────────────────────
 
 function points(ds::SpatialDataset, name::String)

@@ -11,6 +11,10 @@ using JSON
 using Parquet2
 using CSV
 using ImageBase: restrict
+import ImageBase: scaleminmax
+using Colors: Colorant
+using Random: randperm
+import ImageBase.ImageCore: colorview
 
 export
     # Coordinate systems
@@ -19,16 +23,17 @@ export
     AbstractTransformation,
     Identity, Affine, Sequence,
     translation, scaling, rotation, flip_y, compose,
-    apply, apply!, resolve_transform,
+    apply, apply!, resolve,
     # Dataset
     BackingStore, SpatialDataset,
-    coord_systems, transform,
+    elements, coord_systems, transform,
     with_dataset, keep!,
     # Elements
     SpatialPoints, SpatialShapes,
     points, shapes,
     coords, features, feature_ids, coord_system,
     geometries, bbox, instance_id, instance_ids,
+    subsample, top_features, count_per_instance,
     # Views
     SpatialExtent, SpatialROI,
     SpatialElementView, SpatialDatasetView,
@@ -36,6 +41,7 @@ export
     # Images + Labels
     SpatialImage, SpatialLabels,
     data, nchannels, channel_names, build_pyramid!, images, labels,
+    SpatialImageColorView, channel, scaleminmax, colorview,
     # Tables
     SpatialTable,
     tables, nobs, nvar, var_names, feature,
@@ -46,9 +52,9 @@ export
 include("coordsystems.jl")
 include("dataset.jl")
 include("elements.jl")
+include("views.jl")
 include("images.jl")
 include("tables.jl")
-include("views.jl")
 include("zarr_io.jl")
 include("show.jl")
 

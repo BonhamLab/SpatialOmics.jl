@@ -2,6 +2,9 @@ module MakieExt
 
 using Makie
 using SpatialOmics
+using Colors: Gray, Colorant
+using StaticArrays: SVector
+using ImageBase: restrict
 
 # ── SpatialPoints → Scatter ───────────────────────────────────────────────────
 
@@ -19,32 +22,52 @@ Makie.convert_arguments(P::Type{<:Poly}, shps::SpatialShapes) =
 Makie.convert_arguments(P::Type{<:Poly}, v::SpatialElementView{<:SpatialShapes}) =
     convert_arguments(P, geometries(v))
 
-# ── SpatialImage → Heatmap ────────────────────────────────────────────────────
-# Axes are stored as (x, y) for 2D or (x, y, c) for 3D after Zarr.jl's
-# C→F reversal. Heatmap expects matrix[i,j] plotted at (i, j) — so data
-# already needs no reorder for (x, y) slices; we only need Array() to
-# materialise lazy zarr arrays.
-#
-# Default dispatches on channel 1 for 3D images.  Users wanting a specific
-# channel can pass `img.data[:, :, ch]` directly to heatmap.
+# ── SpatialImageColorView → Image ─────────────────────────────────────────────
+# Selects the finest pyramid level whose longest dimension ≤ max_dim, then:
+#   1. Materialises zarr via Array() — bulk read (fast)
+#   2. Restricts further if still oversized
+#   3. Applies display transform (f.(dense)) over in-memory array (fast)
+#   4. Applies colorview to produce Colorant array for Makie
+# This ordering is critical: wrapping zarr in any lazy transform before Array()
+# defeats the chunk-based bulk-read path and causes catastrophic slowdown.
 
-function Makie.convert_arguments(P::Type{<:Heatmap}, img::SpatialImage)
-    N = ndims(img.data)
-    if N == 2
-        return convert_arguments(P, Array(img.data))
+function _select_level(v::SpatialImageColorView{C}; max_dim::Int=2048) where C
+    raw = if isempty(v.pyramid)
+        v.data
     else
-        # find channel axis index
-        ci = findfirst(==(:c), img.axes)
-        ci === nothing && error("SpatialImage has no :c axis")
-        slices = ntuple(d -> d == ci ? 1 : Colon(), N)
-        return convert_arguments(P, Array(img.data[slices...]))
+        result = v.pyramid[end]
+        for lvl in reverse(v.pyramid)
+            maximum(size(lvl)) <= max_dim && (result = lvl; break)
+        end
+        result
     end
+    dense = Array(raw)                          # step 1: bulk zarr read
+    while maximum(size(dense)) > max_dim
+        dense = restrict(dense)                 # step 2: downsample in-memory
+    end
+    eltype(dense) <: Colorant && return dense   # pre-colored composite: done
+    display = v.transform !== nothing ? v.transform.(dense) : dense   # step 3
+    colorview(v.colorant, display)              # step 4
 end
 
-# Coarsest pyramid level — fast overview without loading the full array
-function _coarsest(img::SpatialImage)
-    isempty(img.pyramid) ? img.data : img.pyramid[end]
+function _pixel_extent(v::SpatialImageColorView)
+    xi  = something(findfirst(==(:x), v.axes), 1)
+    yi  = something(findfirst(==(:y), v.axes), 2)
+    nx  = size(v.data, xi)
+    ny  = size(v.data, yi)
+    o   = apply(v.pixel_to_cs, SVector(0.0, 0.0))
+    c   = apply(v.pixel_to_cs, SVector(Float64(nx), Float64(ny)))
+    Float64[o[1], c[1]], Float64[o[2], c[2]]
 end
+
+function Makie.convert_arguments(P::Type{<:Image}, v::SpatialImageColorView)
+    disp             = _select_level(v)
+    x_range, y_range = _pixel_extent(v)
+    return (x_range, y_range, disp)
+end
+
+Makie.convert_arguments(P::Type{<:Image}, img::SpatialImage) =
+    convert_arguments(P, colorview(Gray, img))
 
 # ── SpatialLabels → Heatmap ───────────────────────────────────────────────────
 

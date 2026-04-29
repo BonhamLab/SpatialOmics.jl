@@ -104,10 +104,11 @@ function Base.push!(ds::SpatialDataset, t::AbstractTransformation)
     ds
 end
 
+elements(ds::SpatialDataset)      = ds.elements
 coord_systems(ds::SpatialDataset) = collect(keys(ds.coord_systems))
 
 function transform(ds::SpatialDataset, src::String, dst::String)
-    resolve_transform(ds.transforms, src, dst)
+    resolve(ds.transforms, src, dst)
 end
 
 # ── Element attachment placeholder (implemented in elements.jl) ───────────────

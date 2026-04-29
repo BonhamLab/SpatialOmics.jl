@@ -204,6 +204,13 @@ instance_id(v::SpatialElementView{<:SpatialPoints}) =
 
 # ── typed accessors on SpatialDatasetView ─────────────────────────────────────
 
+function images(v::SpatialDatasetView, name::String)
+    el = v.parent.elements[name]
+    el isa SpatialImage || error("Element \"$name\" is not SpatialImage (got $(typeof(el)))")
+    ext = v.roi isa SpatialExtent ? v.roi : v.roi.extent
+    Base.view(el, ext)
+end
+
 function labels(v::SpatialDatasetView, name::String)
     el = v.parent.elements[name]
     el isa SpatialLabels || error("Element \"$name\" is not SpatialLabels (got $(typeof(el)))")

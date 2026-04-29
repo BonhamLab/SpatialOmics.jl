@@ -134,7 +134,7 @@ function _find_path(
     nothing
 end
 
-function resolve_transform(
+function resolve(
     transforms::Vector{<:AbstractTransformation},
     src::String, dst::String
 )
