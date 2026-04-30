@@ -202,6 +202,17 @@ instance_id(v::SpatialElementView{<:SpatialShapes}) =
 instance_id(v::SpatialElementView{<:SpatialPoints}) =
     v.parent.instance_id[_mask(v.parent, v.roi, v.overlap)]
 
+function count_per_instance(v::SpatialElementView{<:SpatialPoints})
+    mask   = _mask(v.parent, v.roi, v.overlap)
+    counts = Dict{Int32, Int}()
+    for (i, id) in enumerate(v.parent.instance_id)
+        mask[i] || continue
+        id == Int32(0) && continue
+        counts[id] = get(counts, id, 0) + 1
+    end
+    counts
+end
+
 # ── typed accessors on SpatialDatasetView ─────────────────────────────────────
 
 function images(v::SpatialDatasetView, name::String)

@@ -3,6 +3,7 @@ module MakieExt
 using Makie
 using SpatialOmics
 using Colors: Gray, Colorant
+using FixedPointNumbers: FixedPoint, Normed
 using StaticArrays: SVector
 using ImageBase: restrict
 
@@ -31,12 +32,16 @@ Makie.convert_arguments(P::Type{<:Poly}, v::SpatialElementView{<:SpatialShapes})
 # This ordering is critical: wrapping zarr in any lazy transform before Array()
 # defeats the chunk-based bulk-read path and causes catastrophic slowdown.
 
-function _select_level(v::SpatialImageColorView{C}; max_dim::Int=2048) where C
-    raw = if isempty(v.pyramid)
-        v.data
+_to_colorable(arr::AbstractArray) = arr
+_to_colorable(arr::AbstractArray{T}) where {T<:Unsigned} =
+    reinterpret(Normed{T, 8 * sizeof(T)}, arr)
+
+function _select_level(v::SpatialImageColorView{C}; max_dim::Int=4096) where C
+    raw = if isempty(v.pyramid) || maximum(size(v.data)) <= max_dim
+        v.data                            # full-res fits (common for crops)
     else
-        result = v.pyramid[end]
-        for lvl in reverse(v.pyramid)
+        result = v.pyramid[end]           # fallback: coarsest
+        for lvl in v.pyramid              # finest → coarsest; take first that fits
             maximum(size(lvl)) <= max_dim && (result = lvl; break)
         end
         result
@@ -46,7 +51,7 @@ function _select_level(v::SpatialImageColorView{C}; max_dim::Int=2048) where C
         dense = restrict(dense)                 # step 2: downsample in-memory
     end
     eltype(dense) <: Colorant && return dense   # pre-colored composite: done
-    display = v.transform !== nothing ? v.transform.(dense) : dense   # step 3
+    display = v.transform !== nothing ? v.transform.(dense) : _to_colorable(dense)  # step 3
     colorview(v.colorant, display)              # step 4
 end
 
@@ -57,7 +62,7 @@ function _pixel_extent(v::SpatialImageColorView)
     ny  = size(v.data, yi)
     o   = apply(v.pixel_to_cs, SVector(0.0, 0.0))
     c   = apply(v.pixel_to_cs, SVector(Float64(nx), Float64(ny)))
-    Float64[o[1], c[1]], Float64[o[2], c[2]]
+    (o[1], c[1]), (o[2], c[2])
 end
 
 function Makie.convert_arguments(P::Type{<:Image}, v::SpatialImageColorView)

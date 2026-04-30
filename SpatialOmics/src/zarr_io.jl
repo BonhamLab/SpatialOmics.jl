@@ -413,6 +413,23 @@ function _ome_cs_name(attrs::AbstractDict)
     "global"
 end
 
+function _ome_xy_scale(attrs::AbstractDict)
+    for t in get(attrs, "coordinateTransformations", [])
+        get(t, "type", "") == "scale" || continue
+        sc = get(t, "scale", nothing)
+        sc === nothing && continue
+        axes = [get(a, "name", "") for a in get(get(t, "input", Dict()), "axes", [])]
+        if isempty(axes)
+            length(sc) >= 2 && return Float64(sc[1]), Float64(sc[2])
+        else
+            xi = findfirst(==("x"), axes)
+            yi = findfirst(==("y"), axes)
+            xi !== nothing && yi !== nothing && return Float64(sc[xi]), Float64(sc[yi])
+        end
+    end
+    1.0, 1.0
+end
+
 # ── Python OME-NGFF image reader ──────────────────────────────────────────────
 
 function _read_ome_image_zarr_py(grp::String)
@@ -469,6 +486,12 @@ function _read_shapes_parquet(grp::String)
     ids    = Int32.(1:length(valid))
     id_map = Dict{Int32, String}(Int32(j) => string(raw_ids[valid[j]]) for j in eachindex(valid))
 
+    sx, sy = _ome_xy_scale(meta["attributes"])
+    if !(sx ≈ 1.0 && sy ≈ 1.0)
+        scale_pts(pts) = [Point2f(p[1]*sx, p[2]*sy) for p in pts]
+        polys = [Polygon(scale_pts(p.exterior), [scale_pts(r) for r in p.interiors]) for p in polys]
+    end
+
     SpatialShapes(polys; instance_id=ids, coord_system=cs), id_map
 end
 
@@ -508,6 +531,12 @@ function _read_points_parquet(grp::String)
             # cell_id may contain non-numeric strings (e.g. "UNASSIGNED") → 0
             append!(all_inst, [try Int32(v) catch; Int32(0) end for v in id])
         end
+    end
+
+    sx, sy = _ome_xy_scale(attrs)
+    if !(sx ≈ 1.0 && sy ≈ 1.0)
+        all_x .*= Float32(sx)
+        all_y .*= Float32(sy)
     end
 
     codebook   = sort(unique(all_feat))

@@ -128,7 +128,7 @@ function scaleminmax(img::SpatialImage)
                  axes=img.axes, channel_names=img.channel_names,
                  coord_system=img.coord_system, pixel_to_cs=img.pixel_to_cs,
                  pyramid=img.pyramid,
-                 display_transform=ImageBase.scaleminmax(mn, mx))
+                 display_transform=scaleminmax(mn, mx))
 end
 
 # ── pyramid_level — internal helper (not exported) ─────────────────────────────
@@ -184,14 +184,15 @@ colorview(CT::Type{<:Colorant}, img::SpatialImage, ch) =
 function colorview(CT::Type{<:Colorant}, imgs::SpatialImage...)
     all(si -> ndims(si.data) == 2, imgs) ||
         error("All SpatialImage arguments must be 2D for composite colorview; call channel() first")
-    data_arrs = [si.data for si in imgs]
+    _tf(si, arr) = isnothing(si.display_transform) ? arr : mappedarray(si.display_transform, arr)
+    data_arrs = [_tf(si, si.data) for si in imgs]
     cdata     = colorview(CT, data_arrs...)          # ImageCore dispatch — lazy colored composite
     C         = eltype(cdata)
     n_levels  = isempty(imgs[1].pyramid) ? 0 : minimum(length(si.pyramid) for si in imgs)
     cpyr      = AbstractArray{C, 2}[
-        colorview(CT, [imgs[j].pyramid[i] for j in 1:length(imgs)]...) for i in 1:n_levels
+        colorview(CT, [_tf(imgs[j], imgs[j].pyramid[i]) for j in 1:length(imgs)]...) for i in 1:n_levels
     ]
-    SpatialImageColorView{C, C, 2}(cdata, cpyr, CT, nothing,
+    SpatialImageColorView{C, C, 2}(cdata, cpyr, C, nothing,
                                    imgs[1].coord_system, imgs[1].pixel_to_cs, imgs[1].axes)
 end
 
@@ -214,10 +215,12 @@ function Base.view(img::SpatialImage, ext::SpatialExtent)
     yi_lo, yi_hi = _px_range(lo[2], hi[2], size(img.data, yi))
     sl   = ntuple(d -> d == xi ? (xi_lo:xi_hi) : d == yi ? (yi_lo:yi_hi) : Colon(), N)
     p2cs = _shift_pixel_origin(img.pixel_to_cs, Float64(xi_lo-1), Float64(yi_lo-1))
-    new_pyr = map(enumerate(img.pyramid)) do (l, lvl)
-        s = 2.0^l
-        pl, ph = _px_range(lo[1]/s, hi[1]/s, size(lvl, xi))
-        ql, qh = _px_range(lo[2]/s, hi[2]/s, size(lvl, yi))
+    nx, ny = size(img.data, xi), size(img.data, yi)
+    new_pyr = map(img.pyramid) do lvl
+        sx = nx / size(lvl, xi)   # actual scale — works for build_pyramid! and pre-stored Zarr levels
+        sy = ny / size(lvl, yi)
+        pl, ph = _px_range(lo[1]/sx, hi[1]/sx, size(lvl, xi))
+        ql, qh = _px_range(lo[2]/sy, hi[2]/sy, size(lvl, yi))
         view(lvl, ntuple(d -> d == xi ? (pl:ph) : d == yi ? (ql:qh) : Colon(), N)...)
     end
     SpatialImage(view(img.data, sl...);

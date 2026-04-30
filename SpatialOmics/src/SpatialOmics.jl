@@ -12,7 +12,8 @@ using Parquet2
 using CSV
 using ImageBase: restrict
 import ImageBase: scaleminmax
-using Colors: Colorant
+using MappedArrays: mappedarray
+using Colors: Colorant, Gray, RGB
 using Random: randperm
 import ImageBase.ImageCore: colorview
 
@@ -41,7 +42,7 @@ export
     # Images + Labels
     SpatialImage, SpatialLabels,
     data, nchannels, channel_names, build_pyramid!, images, labels,
-    SpatialImageColorView, channel, scaleminmax, colorview,
+    SpatialImageColorView, channel, scaleminmax, colorview, Gray, RGB,
     # Tables
     SpatialTable,
     tables, nobs, nvar, var_names, feature,
