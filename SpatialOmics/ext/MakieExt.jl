@@ -68,7 +68,13 @@ end
 function Makie.convert_arguments(P::Type{<:Image}, v::SpatialImageColorView)
     disp             = _select_level(v)
     x_range, y_range = _pixel_extent(v)
-    return (x_range, y_range, disp)
+    # Makie image!(ax, x_range, y_range, data): data[i,j] → position (x[i], y[j]).
+    # So data must be x-first (first dim = x, second = y).
+    # If data is y-first (yi < xi), transpose to make it x-first.
+    xi  = something(findfirst(==(:x), v.axes), 1)
+    yi  = something(findfirst(==(:y), v.axes), 2)
+    out = (ndims(disp) == 2 && yi < xi) ? permutedims(disp, (2, 1)) : disp
+    return (x_range, y_range, out)
 end
 
 Makie.convert_arguments(P::Type{<:Image}, img::SpatialImage) =
@@ -78,5 +84,47 @@ Makie.convert_arguments(P::Type{<:Image}, img::SpatialImage) =
 
 Makie.convert_arguments(P::Type{<:Heatmap}, lbl::SpatialLabels) =
     convert_arguments(P, Array(lbl.data))
+
+# ── PointDensity → Heatmap ────────────────────────────────────────────────────
+# density(pts; resolution=512, feature="EPCAM") → PointDensity
+# heatmap!(ax, density(pts; resolution=256)) bins transcripts into a 2D grid.
+
+function Makie.convert_arguments(P::Type{<:Heatmap}, d::PointDensity)
+    cds = d.feature !== nothing ? coords(d.pts, d.feature) : coords(d.pts)
+    isempty(cds) && return (0f0:1f0, 0f0:1f0, zeros(Float32, 1, 1))
+    xs = Float32[p[1] for p in cds]
+    ys = Float32[p[2] for p in cds]
+    xmin, xmax = extrema(xs)
+    ymin, ymax = extrema(ys)
+    n  = d.resolution
+    dx = max((xmax - xmin) / n, eps(Float32))
+    dy = max((ymax - ymin) / n, eps(Float32))
+    counts = zeros(Float32, n, n)
+    for i in eachindex(xs)
+        ix = clamp(ceil(Int, (xs[i] - xmin) / dx), 1, n)
+        iy = clamp(ceil(Int, (ys[i] - ymin) / dy), 1, n)
+        counts[ix, iy] += 1f0
+    end
+    (range(xmin, xmax; length=n), range(ymin, ymax; length=n), counts)
+end
+
+# ── ShapeColorView → Poly ─────────────────────────────────────────────────────
+# poly!(ax, cells, rel; color_by=:cell_type, colormap=:tab20)
+# Constructs a ShapeColorView and draws polygons colored by an obs column.
+
+function Makie.poly!(ax::Makie.Axis, v::ShapeColorView; kw...)
+    geoms = geometries(v.shapes)
+    vals  = v.color_by ∈ propertynames(v.rel.obs) ?
+            v.rel.obs[v.color_by] : ones(Int, length(geoms))
+    uniq  = unique(vals)
+    cmap  = Makie.to_colormap(v.colormap)
+    colors = [cmap[mod1(findfirst(==(val), uniq), length(cmap))] for val in vals]
+    Makie.poly!(ax, geoms; color=colors, kw...)
+end
+
+function Makie.poly!(ax::Makie.Axis, cells::SpatialShapes, rel::SpatialRelation;
+                     color_by::Symbol=:label, colormap=:tab20, kw...)
+    Makie.poly!(ax, ShapeColorView(cells, rel, color_by, colormap); kw...)
+end
 
 end

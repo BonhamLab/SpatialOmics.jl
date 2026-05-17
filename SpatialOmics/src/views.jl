@@ -13,10 +13,17 @@ SpatialExtent(xmin, xmax, ymin, ymax; coord_system::String="") =
 
 coord_system(ext::SpatialExtent) = ext.coord_system
 
-SpatialExtent(shp::SpatialShapes) =
-    SpatialExtent(minimum(shp.bbox[:,1]), maximum(shp.bbox[:,2]),
-                  minimum(shp.bbox[:,3]), maximum(shp.bbox[:,4]);
-                  coord_system = shp.coord_system)
+function SpatialExtent(shp::SpatialShapes)
+    xmin = ymin =  Inf
+    xmax = ymax = -Inf
+    for g in shp.geometries
+        for ring in GeoInterface.coordinates(g), pt in ring
+            xmin = min(xmin, Float64(pt[1])); xmax = max(xmax, Float64(pt[1]))
+            ymin = min(ymin, Float64(pt[2])); ymax = max(ymax, Float64(pt[2]))
+        end
+    end
+    SpatialExtent(xmin, xmax, ymin, ymax; coord_system=shp.coord_system)
+end
 
 function _check_cs(a::SpatialExtent, b::SpatialExtent)
     a.coord_system == b.coord_system ||
@@ -133,17 +140,18 @@ function _mask(pts::SpatialPoints, roi::SpatialROI, ::Symbol=:any)
     mask
 end
 
-# Shapes × SpatialExtent: bbox-based check is exact for rectangular ROIs
+# Shapes × SpatialExtent: per-geometry extent check, exact for rectangular ROIs
 function _mask(shp::SpatialShapes, ext::SpatialExtent, overlap::Symbol=:any)
-    bb = shp.bbox   # N×4 [xmin xmax ymin ymax]
     if overlap == :any
-        BitVector(bb[i,1] <= ext.xmax && bb[i,2] >= ext.xmin &&
-                  bb[i,3] <= ext.ymax && bb[i,4] >= ext.ymin
-                  for i in 1:size(bb, 1))
-    else  # :full — shape bbox must lie entirely within extent
-        BitVector(bb[i,1] >= ext.xmin && bb[i,2] <= ext.xmax &&
-                  bb[i,3] >= ext.ymin && bb[i,4] <= ext.ymax
-                  for i in 1:size(bb, 1))
+        BitVector(let e = _extent_of(shp.geometries[i])
+                  e.xmin <= ext.xmax && e.xmax >= ext.xmin &&
+                  e.ymin <= ext.ymax && e.ymax >= ext.ymin
+                  end for i in eachindex(shp.geometries))
+    else  # :full — shape extent must lie entirely within ROI extent
+        BitVector(let e = _extent_of(shp.geometries[i])
+                  e.xmin >= ext.xmin && e.xmax <= ext.xmax &&
+                  e.ymin >= ext.ymin && e.ymax <= ext.ymax
+                  end for i in eachindex(shp.geometries))
     end
 end
 

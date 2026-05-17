@@ -12,12 +12,14 @@ function _write_group_meta(path::String, attrs::AbstractDict=Dict{String,Any}())
 end
 
 function _write_zarr_array(grp_path::String, name::String, arr::AbstractVector{T}) where T
+    rm(joinpath(grp_path, name); recursive=true, force=true)
     z = zcreate(T, length(arr); path=grp_path, name, zarr_format=3,
                 chunks=(length(arr),), fill_value=zero(T))
     z[:] = arr
 end
 
 function _write_zarr_array(grp_path::String, name::String, arr::AbstractMatrix{T}) where T
+    rm(joinpath(grp_path, name); recursive=true, force=true)
     m, n = size(arr)
     z = zcreate(T, m, n; path=grp_path, name, zarr_format=3,
                 chunks=(m, n), fill_value=zero(T))
@@ -25,6 +27,7 @@ function _write_zarr_array(grp_path::String, name::String, arr::AbstractMatrix{T
 end
 
 function _write_zarr_array(grp_path::String, name::String, arr::AbstractArray{T, 3}) where T
+    rm(joinpath(grp_path, name); recursive=true, force=true)
     a, b, c = size(arr)
     z = zcreate(T, a, b, c; path=grp_path, name, zarr_format=3,
                 chunks=(a, b, c), fill_value=zero(T))
@@ -268,28 +271,7 @@ function _read_labels_zarr(grp::String)
     SpatialLabels(data; axes=ax, instance_map, coord_system=cs, pixel_to_cs=p2cs)
 end
 
-# ── Write SpatialTable ─────────────────────────────────────────────────────────
-
-function _write_zarr(root::String, name::String, tbl::SpatialTable)
-    grp = joinpath(root, "tables", name)
-    mkpath(grp)
-    _write_group_meta(grp, Dict(
-        "_spatialdata_attrs" => Dict(
-            "type"         => "table",
-            "region"       => tbl.region === nothing ? "" : tbl.region,
-            "region_key"   => string(tbl.region_key),
-            "instance_key" => string(tbl.instance_key),
-            "region_kind"  => string(tbl.region_kind))))
-    _write_zarr_array(grp, "X", Matrix{Float32}(tbl.X))
-    open(joinpath(grp, "obs.json"), "w") do io
-        JSON.print(io, Dict(string(k) => collect(v) for (k, v) in pairs(tbl.obs)))
-    end
-    open(joinpath(grp, "var.json"), "w") do io
-        JSON.print(io, Dict(string(k) => collect(v) for (k, v) in pairs(tbl.var)))
-    end
-end
-
-# ── Read SpatialTable ──────────────────────────────────────────────────────────
+# ── JSON metadata helpers ──────────────────────────────────────────────────────
 
 function _read_json_table(path::String)
     isfile(path) || return NamedTuple()
@@ -300,49 +282,104 @@ function _read_json_table(path::String)
     NamedTuple{cols}(vals)
 end
 
-function _read_table_zarr(grp::String)
-    meta  = JSON.parse(read(joinpath(grp, "zarr.json"), String))
-    attrs = meta["attributes"]["_spatialdata_attrs"]
-    region_str   = String(get(attrs, "region", ""))
-    region       = isempty(region_str) ? nothing : region_str
-    region_key   = Symbol(attrs["region_key"])
-    instance_key = Symbol(attrs["instance_key"])
-    region_kind  = Symbol(attrs["region_kind"])
+# ── Write SpatialRelation ──────────────────────────────────────────────────────
 
-    raw = zopen(joinpath(grp, "X"), "r"; zarr_format=3)
-    X   = raw[:, :]
+function _kind_meta(kind::Membership{strict}) where strict
+    Dict("kind" => "Membership", "strict" => strict)
+end
+_kind_meta(::KNN)        = Dict("kind" => "KNN")
+_kind_meta(::Proximity)  = Dict("kind" => "Proximity")
+_kind_meta(::Expression) = Dict("kind" => "Expression")
+
+function _write_zarr_relation(root::String, name::String, rel::SpatialRelation)
+    grp = joinpath(root, "relations", name)
+    mkpath(grp)
+    meta = merge(_kind_meta(rel.kind),
+                 Dict("src" => rel.src,
+                      "dst" => rel.dst === nothing ? nothing : rel.dst))
+    _write_group_meta(grp, Dict("_spatialdata_attrs" => meta))
+    _write_zarr_array(grp, "src_ids", rel.src_ids)
+    isempty(rel.dst_ids) || _write_zarr_array(grp, "dst_ids", rel.dst_ids)
+    rel.weights !== nothing && _write_zarr_array(grp, "weights", Matrix{Float32}(rel.weights))
+    open(joinpath(grp, "obs.json"), "w") do io
+        JSON.print(io, Dict(string(k) => collect(v) for (k, v) in pairs(Tables.columntable(rel.obs))))
+    end
+    open(joinpath(grp, "var.json"), "w") do io
+        JSON.print(io, Dict(string(k) => collect(v) for (k, v) in pairs(Tables.columntable(rel.var))))
+    end
+end
+
+# ── Read SpatialRelation ───────────────────────────────────────────────────────
+
+function _kind_from_meta(d::AbstractDict)
+    k = String(d["kind"])
+    k == "Expression" && return Expression()
+    k == "Proximity"  && return Proximity()
+    k == "KNN"        && return KNN(get(d, "k", 30))
+    strict = Bool(get(d, "strict", false))
+    strict ? Membership{true}() : Membership{false}()
+end
+
+function _read_relation_zarr(grp::String)
+    meta  = JSON.parse(read(joinpath(grp, "zarr.json"), String))
+    attrs = get(meta["attributes"], "_spatialdata_attrs", Dict{String,Any}())
+    kind  = _kind_from_meta(attrs)
+    src   = String(get(attrs, "src", ""))
+    dst_v = get(attrs, "dst", nothing)
+    dst   = dst_v === nothing ? nothing : String(dst_v)
+
+    src_ids = Vector{Int32}(zopen(joinpath(grp, "src_ids"), "r"; zarr_format=3)[:])
+    dst_ids = isfile(joinpath(grp, "dst_ids", "zarr.json")) ?
+              Vector{Int32}(zopen(joinpath(grp, "dst_ids"), "r"; zarr_format=3)[:]) :
+              Int32[]
+    weights = isfile(joinpath(grp, "weights", "zarr.json")) ?
+              zopen(joinpath(grp, "weights"), "r"; zarr_format=3)[:, :] :
+              nothing
     obs = _read_json_table(joinpath(grp, "obs.json"))
     var = _read_json_table(joinpath(grp, "var.json"))
-
-    SpatialTable(X; obs, var, region, region_key, instance_key, region_kind)
+    SpatialRelation(src, dst, src_ids, dst_ids, weights, obs, var, kind)
 end
 
 # ── Dataset write ──────────────────────────────────────────────────────────────
 
-function Base.write(ds::SpatialDataset, path::String, ::SpatialDataZarr)
+function _write_dataset_zarr(ds::SpatialDataset, path::String)
     mkpath(path)
     _init_zarr_root(path)
-    for subdir in ("points", "shapes", "images", "labels", "tables")
+    for subdir in ("points", "shapes", "images", "labels", "relations")
         mkpath(joinpath(path, subdir))
         _write_group_meta(joinpath(path, subdir))
     end
     for (name, el) in ds.elements
-        if el isa SpatialPoints || el isa SpatialShapes || el isa SpatialImage ||
-           el isa SpatialLabels || el isa SpatialTable
+        if el isa SpatialPoints || el isa SpatialShapes || el isa SpatialImage || el isa SpatialLabels
             _write_zarr(path, name, el)
         end
     end
-    meta = Dict(
-        "coord_systems" => [
-            Dict("name" => cs.name,
-                 "axes"  => collect(string.(cs.axes)),
-                 "units" => collect(cs.units))
-            for cs in values(ds.coord_systems)],
-    )
+    for (name, rel) in ds.relations
+        rel isa SpatialRelation && _write_zarr_relation(path, name, rel)
+    end
     open(joinpath(path, "spatialomics_meta.json"), "w") do io
-        JSON.print(io, meta)
+        JSON.print(io, Dict(
+            "coord_systems" => [
+                Dict("name" => cs.name,
+                     "axes"  => collect(string.(cs.axes)),
+                     "units" => collect(cs.units))
+                for cs in values(ds.coord_systems)]))
     end
     path
+end
+
+function Base.write(ds::SpatialDataset, path::String, ::SpatialDataZarr)
+    ds.backing.owned && @warn "Backing store is still at temp path \"$(ds.backing.path)\". " *
+        "Call write!(ds, path, SpatialDataZarr()) to also update the dataset location."
+    _write_dataset_zarr(ds, path)
+end
+
+# write! — write AND update backing store location
+function write!(ds::SpatialDataset, path::String, ::SpatialDataZarr)
+    _write_dataset_zarr(ds, path)
+    ds.backing.path  = abspath(path)
+    ds.backing.owned = false
+    ds
 end
 
 # ── Dataset read ───────────────────────────────────────────────────────────────
@@ -365,11 +402,13 @@ function Base.read(::SpatialDataZarr, path::String) :: SpatialDataset
     for (subdir, reader) in (("points", _read_points_zarr),
                               ("shapes", _read_shapes_zarr),
                               ("images", _read_image_zarr),
-                              ("labels", _read_labels_zarr),
-                              ("tables", _read_table_zarr))
+                              ("labels", _read_labels_zarr))
         for name in _zarr_element_names(path, subdir)
             ds.elements[name] = reader(joinpath(path, subdir, name))
         end
+    end
+    for name in _zarr_element_names(path, "relations")
+        ds.relations[name] = _read_relation_zarr(joinpath(path, "relations", name))
     end
     ds
 end
@@ -579,8 +618,22 @@ function _read_anndata_table_zarr(grp::String)
     catch
     end
 
-    var_nt = isempty(vnames) ? NamedTuple() : (name = vnames,)
-    SpatialTable(X; var=var_nt, region, region_key, instance_key, region_kind=:shapes)
+    var_nt = isempty(vnames) ? NamedTuple() : NamedTuple{(:name,)}((vnames,))
+
+    # obs: read instance_ids from obs/{instance_key} zarr array if present
+    obs_ids_path = joinpath(grp, "obs", string(instance_key))
+    src_ids = if isdir(obs_ids_path)
+        try
+            Vector{Int32}(zopen(obs_ids_path, "r"; zarr_format=3)[:])
+        catch
+            Int32[]
+        end
+    else
+        Int32[]
+    end
+
+    src_str = isnothing(region) ? "" : region
+    SpatialRelation(Expression(), src_str, src_ids, X; var=var_nt)
 end
 
 # ── Python SpatialData dataset reader ─────────────────────────────────────────
@@ -589,16 +642,22 @@ function _read_python_spatialdata(path::String)
     ds = SpatialDataset(; path, spill_threshold=typemax(Int))
     str_id_maps = Dict{String, Dict{Int32, String}}()
 
-    for (kind, reader) in (
-            ("images",  _read_ome_image_zarr_py),
-            ("labels",  _read_ome_labels_zarr_py),
-            ("tables",  _read_anndata_table_zarr))
+    for (kind, reader) in (("images", _read_ome_image_zarr_py),
+                            ("labels", _read_ome_labels_zarr_py))
         for name in _zarr_element_names(path, kind)
             try
                 ds.elements[name] = reader(joinpath(path, kind, name))
             catch e
                 @warn "Could not read $kind \"$name\": $e"
             end
+        end
+    end
+
+    for name in _zarr_element_names(path, "tables")
+        try
+            ds.relations[name] = _read_anndata_table_zarr(joinpath(path, "tables", name))
+        catch e
+            @warn "Could not read table \"$name\": $e"
         end
     end
 
@@ -630,14 +689,21 @@ _element_bytes(pts::SpatialPoints{T}) where T =
     (2 * sizeof(T) + 2 * sizeof(Int32)) * length(pts)
 
 _element_bytes(shp::SpatialShapes) =
-    sizeof(Float64) * 4 * length(shp)   # bbox rows as rough lower bound
+    sizeof(Float32) * 8 * length(shp)   # rough estimate: ~8 float32 coords per polygon vertex avg
 
-_element_bytes(tbl::SpatialTable) = sizeof(eltype(tbl.X)) * length(tbl.X)
+_element_bytes(rel::SpatialRelation) =
+    rel.weights === nothing ? 0 : sizeof(Float32) * length(rel.weights)
 _element_bytes(::Any) = 0
 
 function _spill_element!(bs::BackingStore, name::String, el)
     _element_bytes(el) < bs.spill_threshold && return
     (el isa SpatialPoints || el isa SpatialShapes) && _write_zarr(bs.path, name, el)
+    nothing
+end
+
+function _spill_relation!(bs::BackingStore, name::String, rel::SpatialRelation)
+    _element_bytes(rel) < bs.spill_threshold && return
+    _write_zarr_relation(bs.path, name, rel)
     nothing
 end
 

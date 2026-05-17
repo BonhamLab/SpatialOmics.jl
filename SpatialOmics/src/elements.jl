@@ -69,36 +69,15 @@ GeoInterface.getgeom(::GeoInterface.MultiPointTrait, pts::SpatialPoints, i::Int)
 
 mutable struct SpatialShapes{G<:AbstractGeometry}
     geometries   :: Vector{G}
-    bbox         :: Matrix{Float64}    # N×4 [xmin xmax ymin ymax]
     instance_id  :: Vector{Int32}
     coord_system :: String
     _attachment  :: Union{Nothing, Tuple{WeakRef, String}}
 end
 
-function _compute_bbox(geoms::Vector{<:AbstractGeometry})
-    n = length(geoms)
-    bbox = zeros(Float64, n, 4)
-    for (i, g) in enumerate(geoms)
-        rings = GeoInterface.coordinates(g)    # [[ring1_coords...], ...]
-        xmin = ymin =  Inf
-        xmax = ymax = -Inf
-        for ring in rings, pt in ring
-            xmin = min(xmin, Float64(pt[1]))
-            xmax = max(xmax, Float64(pt[1]))
-            ymin = min(ymin, Float64(pt[2]))
-            ymax = max(ymax, Float64(pt[2]))
-        end
-        bbox[i, 1] = xmin; bbox[i, 2] = xmax
-        bbox[i, 3] = ymin; bbox[i, 4] = ymax
-    end
-    bbox
-end
-
 function SpatialShapes(geometries::Vector{G};
                        instance_id::Vector{Int32}=zeros(Int32, length(geometries)),
                        coord_system::String="") where G<:AbstractGeometry
-    bbox = _compute_bbox(geometries)
-    SpatialShapes{G}(geometries, bbox, instance_id, coord_system, nothing)
+    SpatialShapes{G}(geometries, instance_id, coord_system, nothing)
 end
 
 Base.length(shp::SpatialShapes) = length(shp.geometries)
@@ -108,16 +87,11 @@ Base.length(shp::SpatialShapes) = length(shp.geometries)
 struct SpatialShape{G<:AbstractGeometry}
     geometry     :: G
     instance_id  :: Int32
-    bbox         :: NTuple{4, Float64}   # (xmin, xmax, ymin, ymax)
     coord_system :: String
 end
 
-function Base.getindex(shp::SpatialShapes{G}, i::Int) where G
-    SpatialShape{G}(shp.geometries[i],
-                    shp.instance_id[i],
-                    (shp.bbox[i,1], shp.bbox[i,2], shp.bbox[i,3], shp.bbox[i,4]),
-                    shp.coord_system)
-end
+Base.getindex(shp::SpatialShapes{G}, i::Int) where G =
+    SpatialShape{G}(shp.geometries[i], shp.instance_id[i], shp.coord_system)
 
 Base.iterate(shp::SpatialShapes, i=1) = i > length(shp) ? nothing : (shp[i], i+1)
 Base.eltype(::Type{SpatialShapes{G}}) where G = SpatialShape{G}
@@ -130,10 +104,9 @@ function Base.filter(pred, shp::SpatialShapes{G}) where G
 end
 
 # Accessors
-geometries(shp::SpatialShapes)  = shp.geometries
-bbox(shp::SpatialShapes)        = shp.bbox
-instance_id(shp::SpatialShapes) = shp.instance_id
-instance_id(s::SpatialShape)    = s.instance_id
+geometries(shp::SpatialShapes)   = shp.geometries
+instance_id(shp::SpatialShapes)  = shp.instance_id
+instance_id(s::SpatialShape)     = s.instance_id
 coord_system(shp::SpatialShapes) = shp.coord_system
 
 # ── GeoInterface — GeometryCollection ─────────────────────────────────────────
@@ -188,7 +161,6 @@ function apply!(t::AbstractTransformation, shp::SpatialShapes{G}) where G
     for i in eachindex(shp.geometries)
         shp.geometries[i] = _transform_geom(t, shp.geometries[i])
     end
-    shp.bbox = _compute_bbox(shp.geometries)
     shp.coord_system = t.dst
     shp
 end
@@ -223,10 +195,8 @@ function Base.copy(pts::SpatialPoints{T}) where T
                      copy(pts.instance_id), pts.coord_system, nothing)
 end
 
-function Base.copy(shp::SpatialShapes{G}) where G
-    SpatialShapes{G}(copy(shp.geometries), copy(shp.bbox), copy(shp.instance_id),
-                     shp.coord_system, nothing)
-end
+Base.copy(shp::SpatialShapes{G}) where G =
+    SpatialShapes{G}(copy(shp.geometries), copy(shp.instance_id), shp.coord_system, nothing)
 
 # ── subsample ─────────────────────────────────────────────────────────────────
 

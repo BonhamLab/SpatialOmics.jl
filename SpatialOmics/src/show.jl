@@ -46,9 +46,10 @@ function Base.show(io::IO, lbl::SpatialLabels{T}) where T
     print(io, "SpatialLabels{$T}: $sz, $ni instances$cs")
 end
 
-function Base.show(io::IO, tbl::SpatialTable)
-    reg = tbl.region === nothing ? "unlinked" : "→ \"$(tbl.region)\""
-    print(io, "SpatialTable: $(nobs(tbl)) obs × $(nvar(tbl)) var ($reg)")
+function Base.show(io::IO, rel::SpatialRelation{K}) where K
+    dst_str = rel.dst === nothing ? "" : " → \"$(rel.dst)\""
+    w_str   = rel.weights === nothing ? "unweighted" : "$(size(rel.weights))"
+    print(io, "SpatialRelation{$(nameof(K))}: \"$(rel.src)\"$dst_str · $(nobs(rel)) obs · $w_str")
 end
 
 function Base.show(io::IO, img::SpatialImage{T}) where T
@@ -85,11 +86,17 @@ end
 # Full REPL form — used when ds is displayed at top level
 function Base.show(io::IO, ::MIME"text/plain", ds::SpatialDataset)
     n   = length(ds.elements)
+    nr  = length(ds.relations)
     ncs = length(ds.coord_systems)
-    println(io, "SpatialDataset with $n element$(n == 1 ? "" : "s") and $ncs coord_system$(ncs == 1 ? "" : "s"):")
+    println(io, "SpatialDataset with $n element$(n == 1 ? "" : "s"), $nr relation$(nr == 1 ? "" : "s"), $ncs coord_system$(ncs == 1 ? "" : "s"):")
     for (name, el) in ds.elements
         print(io, "  \"$name\" => ")
         show(io, el)
+        println(io)
+    end
+    for (name, rel) in ds.relations
+        print(io, "  \"$name\" => ")
+        show(io, rel)
         println(io)
     end
     if !isempty(ds.coord_systems)

@@ -30,10 +30,10 @@ export
     elements, coord_systems, transform,
     with_dataset, keep!,
     # Elements
-    SpatialPoints, SpatialShapes,
+    SpatialPoints, SpatialShapes, SpatialShape,
     points, shapes,
     coords, features, feature_ids, coord_system,
-    geometries, bbox, instance_id, instance_ids,
+    geometries, instance_id, instance_ids,
     subsample, top_features, count_per_instance,
     # Views
     SpatialExtent, SpatialROI,
@@ -43,19 +43,25 @@ export
     SpatialImage, SpatialLabels,
     data, nchannels, channel_names, build_pyramid!, images, labels,
     SpatialImageColorView, channel, scaleminmax, colorview, Gray, RGB,
-    # Tables
-    SpatialTable,
-    tables, nobs, nvar, var_names, feature,
+    # Relations
+    RelationKind, Membership, Proximity, KNN, Expression,
+    SpatialRelation,
+    relations, nobs, nvar, var_names,
+    annotate,
+    # Analysis
+    analyze, distances,
+    PointDensity, density, ShapeColorView,
     # I/O
-    SpatialDataZarr,
+    SpatialDataZarr, write!,
     CosMx
 
 include("coordsystems.jl")
+include("relations.jl")
 include("dataset.jl")
 include("elements.jl")
 include("views.jl")
 include("images.jl")
-include("tables.jl")
+include("analysis.jl")
 include("zarr_io.jl")
 include("show.jl")
 

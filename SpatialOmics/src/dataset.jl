@@ -46,7 +46,7 @@ mutable struct SpatialDataset
     coord_systems :: OrderedDict{String, CoordinateSystem}
     transforms    :: Vector{AbstractTransformation}
     backing       :: BackingStore
-    annotations   :: Dict{String, Any}     # element name → Tables.AbstractColumns
+    relations     :: Dict{String, Any}     # name → SpatialRelation
     metadata      :: Dict{String, Any}
 end
 
@@ -113,12 +113,18 @@ end
 
 # ── Element attachment placeholder (implemented in elements.jl) ───────────────
 
+function Base.setindex!(ds::SpatialDataset, rel::SpatialRelation, name::String)
+    _spill_relation!(ds.backing, name, rel)
+    ds.relations[name] = rel
+    ds
+end
+
 function Base.setindex!(ds::SpatialDataset, el, name::String)
     existing = _owning_dataset(el)
     if existing !== nothing && existing !== ds
         error("Element already attached to a different dataset. " *
               "Use `ds[\"$name\"] = copy(el)` to attach a detached copy. " *
-              "Note: mappings involving this element in the original dataset will not transfer.")
+              "Note: relations involving this element in the original dataset will not transfer.")
     end
     _spill_element!(ds.backing, name, el)
     _set_backref!(el, ds, name)
@@ -129,3 +135,13 @@ end
 Base.getindex(ds::SpatialDataset, name::String) = ds.elements[name]
 Base.haskey(ds::SpatialDataset, name::String) = haskey(ds.elements, name)
 Base.keys(ds::SpatialDataset) = keys(ds.elements)
+
+function relations(ds::SpatialDataset)
+    ds.relations
+end
+
+function relations(ds::SpatialDataset, name::String)
+    haskey(ds.relations, name) ||
+        error("No relation \"$name\". Available: $(join(keys(ds.relations), ", "))")
+    ds.relations[name]
+end

@@ -49,19 +49,19 @@ using Test
         @test apply(tc, [0.0 0.0]) ≈ [1.0 1.0]
     end
 
-    @testset "Transformations — resolve_transform / Dijkstra" begin
+    @testset "Transformations — resolve / Dijkstra" begin
         transforms = AbstractTransformation[
             translation(100.0, 200.0, "fov_1", "global"),
             scaling(0.5, 0.5, "px", "µm"),
         ]
-        t = resolve_transform(transforms, "fov_1", "global")
+        t = resolve(transforms, "fov_1", "global")
         @test t isa Affine
 
         # no path
-        @test_throws ErrorException resolve_transform(transforms, "nowhere", "global")
+        @test_throws ErrorException resolve(transforms, "nowhere", "global")
 
         # identity (same src == dst)
-        t2 = resolve_transform(transforms, "global", "global")
+        t2 = resolve(transforms, "global", "global")
         @test t2 isa Identity
     end
 
@@ -260,7 +260,7 @@ end
         @test coords(pts)[2] ≈ Point2f(11, 20)
     end
 
-    @testset "SpatialShapes — construction + bbox" begin
+    @testset "SpatialShapes — construction" begin
         shp = SpatialShapes(
             [Polygon([Point2f(0,0), Point2f(1,0), Point2f(1,1), Point2f(0,1), Point2f(0,0)]),
              Polygon([Point2f(2,2), Point2f(3,2), Point2f(3,3), Point2f(2,3), Point2f(2,2)])];
@@ -268,12 +268,7 @@ end
         @test shp isa SpatialShapes{<:Polygon}
         @test length(shp) == 2
         @test coord_system(shp) == "global"
-        @test bbox(shp)[1, 1] ≈ 0.0   # row 1: xmin
-        @test bbox(shp)[1, 2] ≈ 1.0   # row 1: xmax
-        @test bbox(shp)[1, 3] ≈ 0.0   # row 1: ymin
-        @test bbox(shp)[1, 4] ≈ 1.0   # row 1: ymax
-        @test bbox(shp)[2, 1] ≈ 2.0   # row 2: xmin
-        @test bbox(shp)[2, 2] ≈ 3.0   # row 2: xmax
+        @test length(geometries(shp)) == 2
     end
 
     @testset "SpatialShapes — GeoInterface" begin
@@ -291,10 +286,9 @@ end
         t = translation(10.0, 20.0, "fov_1", "global")
         shp2 = apply(t, shp)
         @test coord_system(shp2) == "global"
-        @test bbox(shp2)[1, 1] ≈ 10.0   # xmin shifted by 10
-        @test bbox(shp2)[1, 3] ≈ 20.0   # ymin shifted by 20
+        @test GeoInterface.coordinates(geometries(shp2)[1])[1][1][1] ≈ 10.0  # x shifted
+        @test GeoInterface.coordinates(geometries(shp2)[1])[1][1][2] ≈ 20.0  # y shifted
         @test coord_system(shp) == "fov_1"   # original unchanged
-        @test bbox(shp)[1, 1] ≈ 0.0
     end
 
     @testset "SpatialShapes — iteration and filter" begin
@@ -310,7 +304,6 @@ end
         @test row isa SpatialShape
         @test row.instance_id == Int32(20)
         @test row.coord_system == "global"
-        @test row.bbox == (1.0, 2.0, 0.0, 1.0)
 
         kept = filter(s -> s.instance_id in [10, 30], shp)
         @test length(kept) == 2
@@ -325,8 +318,8 @@ end
         result = apply!(t, shp)
         @test result === shp
         @test coord_system(shp) == "global"
-        @test bbox(shp)[1, 1] ≈ 10.0
-        @test bbox(shp)[1, 3] ≈ 20.0
+        @test GeoInterface.coordinates(geometries(shp)[1])[1][1][1] ≈ 10.0
+        @test GeoInterface.coordinates(geometries(shp)[1])[1][1][2] ≈ 20.0
     end
 
     @testset "Typed dataset accessors" begin
@@ -380,14 +373,14 @@ end
     @testset "SpatialExtent from SpatialShapes" begin
         rings = [[Point2f(0,0), Point2f(1,0), Point2f(1,1), Point2f(0,1), Point2f(0,0)],
                  [Point2f(2,2), Point2f(4,2), Point2f(4,5), Point2f(2,5), Point2f(2,2)]]
-        shp = SpatialShapes(Polygon.(rings); instance_id=Int32[1,2], coord_system="global")
-        ext = SpatialExtent(shp)
+        shp_ext = SpatialShapes(Polygon.(rings); instance_id=Int32[1,2], coord_system="global")
+        ext = SpatialExtent(shp_ext)
         @test ext.xmin == 0.0 && ext.xmax == 4.0
         @test ext.ymin == 0.0 && ext.ymax == 5.0
         @test coord_system(ext) == "global"
 
         # filter then extent — the idiomatic pipeline
-        ext2 = SpatialExtent(filter(s -> s.instance_id == Int32(1), shp))
+        ext2 = SpatialExtent(filter(s -> s.instance_id == Int32(1), shp_ext))
         @test ext2.xmax == 1.0
     end
 
@@ -470,11 +463,12 @@ end
         @test n_any > n_full
         @test n_full >= 1
         sub = collect(view(shp, ext; overlap=:full))
-        bb  = bbox(sub)
-        @test all(bb[:, 1] .>= 1.0)   # xmin ≥ ext.xmin
-        @test all(bb[:, 2] .<= 3.0)   # xmax ≤ ext.xmax
-        @test all(bb[:, 3] .>= 1.0)   # ymin ≥ ext.ymin
-        @test all(bb[:, 4] .<= 3.0)   # ymax ≤ ext.ymax
+        # all coords of fully-inside shapes lie within [1,3]×[1,3]
+        @test all(geometries(sub)) do g
+            all(Iterators.flatten(GeoInterface.coordinates(g))) do pt
+                1.0 <= pt[1] <= 3.0 && 1.0 <= pt[2] <= 3.0
+            end
+        end
     end
 
     @testset "view — invalid overlap raises error" begin
@@ -598,7 +592,7 @@ end
         try
             ds = SpatialDataset()
             push!(ds, CoordinateSystem("px"; axes=(:x,:y), units=("px","px")))
-            ds["pts"] = pts
+            ds["pts"] = copy(pts)
             write(ds, path, SpatialDataZarr())
             close(ds)
 
@@ -614,7 +608,7 @@ end
         path = mktempdir()
         try
             ds = SpatialDataset(; path, spill_threshold=0)
-            ds["pts"] = pts
+            ds["pts"] = copy(pts)
             @test isfile(joinpath(path, "points", "pts", "zarr.json"))
             @test isfile(joinpath(path, "points", "pts", "coords", "zarr.json"))
             close(ds)
@@ -627,7 +621,7 @@ end
         path = mktempdir()
         try
             ds = SpatialDataset()
-            ds["pts"] = pts; ds["cells"] = cells
+            ds["pts"] = copy(pts); ds["cells"] = copy(cells)
             write(ds, path, SpatialDataZarr())
             close(ds)
             @test isfile(joinpath(path, "zarr.json"))
@@ -858,82 +852,37 @@ end
         instance_id=Int32.(1:n_cells), coord_system="global_px")
 
     X   = rand(Float32, n_cells, n_genes)
-    tbl = SpatialTable(X;
-                       obs          = (instance_id=Int32.(1:n_cells),),
-                       var          = (name=genes,),
-                       region       = "cells",
-                       instance_key = :instance_id,
-                       region_kind  = :shapes)
+    rel = SpatialRelation(Expression(), "cells", Int32.(1:n_cells), X;
+                          obs=(instance_id=Int32.(1:n_cells),), var=(name=genes,))
 
-    # ── SpatialTable construction ──────────────────────────────────────────────
+    # ── SpatialRelation construction ───────────────────────────────────────────
 
-    @testset "SpatialTable construction" begin
-        @test nobs(tbl) == n_cells
-        @test nvar(tbl) == n_genes
-        @test var_names(tbl) == genes
-        @test tbl.region == "cells"
-        @test tbl.instance_key == :instance_id
-        @test tbl.region_kind == :shapes
+    @testset "SpatialRelation construction" begin
+        @test nobs(rel) == n_cells
+        @test nvar(rel) == n_genes
+        @test var_names(rel) == genes
+        @test rel.src == "cells"
+        @test rel.kind isa Expression
     end
 
-    @testset "SpatialTable show" begin
-        s = sprint(show, tbl)
-        @test contains(s, "SpatialTable")
+    @testset "SpatialRelation show" begin
+        s = sprint(show, rel)
+        @test contains(s, "SpatialRelation")
         @test contains(s, string(n_cells))
         @test contains(s, "cells")
     end
 
-    # ── feature API — full dataset ─────────────────────────────────────────────
+    # ── expression weight lookup ───────────────────────────────────────────────
 
-    @testset "feature on full dataset" begin
-        ds = SpatialDataset()
-        try
-            ds["cells"] = cells
-            ds["expr"]  = tbl
-            vals = feature(ds, "Actb"; region="cells")
-            @test length(vals) == n_cells
-            # values come back in shape order (same as cells.instance_id order)
-            actb_col = findfirst(==("Actb"), genes)
-            @test vals ≈ [X[i, actb_col] for i in 1:n_cells]
-        finally
-            close(ds)
-        end
+    @testset "expression weight lookup" begin
+        actb_col = findfirst(==("Actb"), var_names(rel))
+        @test actb_col !== nothing
+        @test rel.weights[:, actb_col] ≈ [X[i, actb_col] for i in 1:n_cells]
     end
 
-    @testset "feature error on missing gene" begin
-        ds = SpatialDataset()
-        try
-            ds["cells"] = cells; ds["expr"] = tbl
-            @test_throws ErrorException feature(ds, "NotAGene"; region="cells")
-        finally
-            close(ds)
-        end
-    end
-
-    # ── feature API — ROI view ─────────────────────────────────────────────────
-
-    @testset "feature on dataset view" begin
-        ds = SpatialDataset()
-        try
-            ds["cells"] = cells; ds["expr"] = tbl
-            ext  = SpatialExtent(0, 500, 0, 500; coord_system="global_px")
-            dsv  = view(ds, ext)
-
-            vals = feature(dsv, "Gapdh"; region="cells")
-            shpv = shapes(dsv, "cells")
-            @test length(vals) == length(shpv)   # same count as shapes in ROI
-
-            # values match expectation: filter cells by bbox, look up Gapdh column
-            gapdh_col = findfirst(==("Gapdh"), genes)
-            mask = [cells.bbox[i,1] <= 500 && cells.bbox[i,2] >= 0 &&
-                    cells.bbox[i,3] <= 500 && cells.bbox[i,4] >= 0
-                    for i in 1:n_cells]
-            ids_in = cells.instance_id[mask]
-            expected = [X[i, gapdh_col] for i in ids_in]
-            @test vals ≈ expected
-        finally
-            close(ds)
-        end
+    @testset "var_names lookup" begin
+        @test var_names(rel) == genes
+        @test length(var_names(rel)) == n_genes
     end
 
     # ── passthrough accessors on SpatialElementView ────────────────────────────
@@ -971,11 +920,12 @@ end
 
     # ── Zarr round-trip ────────────────────────────────────────────────────────
 
-    @testset "SpatialTable zarr roundtrip" begin
+    @testset "SpatialRelation zarr roundtrip" begin
         path = mktempdir()
         try
             ds = SpatialDataset()
-            ds["cells"] = cells; ds["expr"] = tbl
+            ds["cells"] = cells
+            ds["expr"]  = rel
             with_logger(SimpleLogger(stderr, Logging.Error)) do
                 write(ds, path, SpatialDataZarr())
             end
@@ -984,12 +934,12 @@ end
             ds2 = with_logger(SimpleLogger(stderr, Logging.Error)) do
                 read(SpatialDataZarr(), path)
             end
-            tbl2 = tables(ds2, "expr")
-            @test nobs(tbl2) == n_cells
-            @test nvar(tbl2) == n_genes
-            @test var_names(tbl2) == genes
-            @test tbl2.region == "cells"
-            @test tbl2.X ≈ X   atol=1e-5
+            rel2 = relations(ds2, "expr")
+            @test nobs(rel2) == n_cells
+            @test nvar(rel2) == n_genes
+            @test var_names(rel2) == genes
+            @test rel2.src == "cells"
+            @test rel2.weights ≈ X   atol=1e-5
             close(ds2)
         finally
             rm(path; recursive=true, force=true)
@@ -1050,9 +1000,8 @@ end  # M6
             shp = SpatialShapes(polys; instance_id=Int32.(1:10), coord_system="global")
 
             X   = rand(Float32, 10, 3)
-            tbl = SpatialTable(X;
-                obs=(instance_id=Int32.(1:10),), var=(name=genes,),
-                region="cells", instance_key=:instance_id, region_kind=:shapes)
+            tbl = SpatialRelation(Expression(), "cells", Int32.(1:10), X;
+                                  obs=(instance_id=Int32.(1:10),), var=(name=genes,))
 
             img = SpatialImage(rand(UInt16, 8, 8, 2);
                 axes=(:y,:x,:c), channel_names=["DAPI","GFP"], coord_system="global")
@@ -1081,7 +1030,7 @@ end  # M6
 
             @test haskey(ds2.elements, "transcripts")
             @test haskey(ds2.elements, "cells")
-            @test haskey(ds2.elements, "expression")
+            @test haskey(ds2.relations, "expression")
             @test haskey(ds2.elements, "dapi")
             @test haskey(ds2.elements, "seg")
 
@@ -1092,11 +1041,11 @@ end  # M6
             shp2 = shapes(ds2, "cells")
             @test length(shp2) == 10
 
-            tbl2 = tables(ds2, "expression")
+            tbl2 = relations(ds2, "expression")
             @test nobs(tbl2) == 10
             @test nvar(tbl2) == 3
             @test var_names(tbl2) == genes
-            @test tbl2.X ≈ X
+            @test tbl2.weights ≈ X
 
             img2 = images(ds2, "dapi")
             @test nchannels(img2) == 2
@@ -1123,7 +1072,7 @@ end  # M6
             @test haskey(ds.elements, "cell_labels")
             @test haskey(ds.elements, "cell_boundaries")
             @test haskey(ds.elements, "transcripts")
-            @test haskey(ds.elements, "table")
+            @test haskey(ds.relations, "table")
 
             img = images(ds, "morphology_focus")
             @test img isa SpatialImage
@@ -1137,7 +1086,7 @@ end  # M6
             @test length(pts) > 0
             @test length(features(pts)) > 0
 
-            tbl = tables(ds, "table")
+            tbl = relations(ds, "table")
             @test nvar(tbl) == 377
             @test nobs(tbl) > 0
         end
@@ -1183,3 +1132,125 @@ end
     end
 
 end
+
+@testset "SpatialOmics M11" begin
+
+    using GeometryBasics, Random
+
+    # ── fixtures: 3 square cells, 6 known transcripts ─────────────────────────
+    cells = SpatialShapes(
+        [Polygon([Point2f(0,0),  Point2f(10,0),  Point2f(10,10),  Point2f(0,10),  Point2f(0,0)]),
+         Polygon([Point2f(20,0), Point2f(30,0),  Point2f(30,10),  Point2f(20,10), Point2f(20,0)]),
+         Polygon([Point2f(40,0), Point2f(50,0),  Point2f(50,10),  Point2f(40,10), Point2f(40,0)])];
+        instance_id=Int32.([1, 2, 3]))
+
+    pts = SpatialPoints(
+        [Point2f(5,5),  Point2f(5,5),
+         Point2f(25,5), Point2f(25,5),
+         Point2f(45,5), Point2f(45,5)];
+        feature_id=Int32.([1,2,1,2,1,2]),
+        feature_codebook=["GeneA","GeneB"])
+
+    # ── analyze(Expression()) ─────────────────────────────────────────────────
+
+    @testset "analyze Expression" begin
+        rel = analyze(Expression(), pts, cells)
+        @test rel.kind isa Expression
+        @test nobs(rel) == 3
+        @test nvar(rel) == 2
+        @test size(rel.weights) == (3, 2)
+        @test all(rel.weights .== 1f0)
+        @test var_names(rel) == ["GeneA","GeneB"]
+        @test length(rel.src_ids) == 3
+    end
+
+    # ── analyze(Membership()) ─────────────────────────────────────────────────
+
+    @testset "analyze Membership" begin
+        rel = analyze(Membership(), pts, cells)
+        @test rel.kind isa Membership
+        @test nobs(rel) == 6
+        @test rel.dst_ids == Int32[1,1,2,2,3,3]
+        @test rel.weights === nothing
+    end
+
+    # ── default dispatch ──────────────────────────────────────────────────────
+
+    @testset "default dispatch pts+shapes → Expression" begin
+        rel = analyze(pts, cells)
+        @test rel.kind isa Expression
+    end
+
+    @testset "default dispatch shapes+shapes → Membership" begin
+        rel = analyze(cells, cells)
+        @test rel.kind isa Membership
+    end
+
+    # ── KNN stub fires without backend ───────────────────────────────────────
+
+    @testset "KNN stub error" begin
+        rel = analyze(pts, cells)
+        @test_throws ErrorException analyze(KNN(3), rel)
+    end
+
+    # ── annotate — pure, shared weights ──────────────────────────────────────
+
+    @testset "annotate" begin
+        rel    = analyze(Expression(), pts, cells)
+        labels = ["T","B","M"]
+        rel2   = annotate(rel, labels; key=:cell_type)
+        @test hasproperty(rel2.obs, :cell_type)
+        @test rel2.obs.cell_type == labels
+        @test rel2.weights === rel.weights        # no copy
+    end
+
+    # ── distances ─────────────────────────────────────────────────────────────
+
+    @testset "distances shapes→shapes" begin
+        d = distances(cells, cells)
+        @test length(d) == length(cells)
+        @test all(d .>= 0f0)
+    end
+
+    # ── PointDensity and ShapeColorView struct construction ───────────────────
+
+    @testset "PointDensity construction" begin
+        pd = density(pts; resolution=64, feature="GeneA")
+        @test pd isa PointDensity
+        @test pd.resolution == 64
+        @test pd.feature == "GeneA"
+    end
+
+    @testset "ShapeColorView construction" begin
+        rel  = analyze(Expression(), pts, cells)
+        rel2 = annotate(rel, ["T","B","M"]; key=:cell_type)
+        scv  = ShapeColorView(cells, rel2, :cell_type, :tab10)
+        @test scv isa ShapeColorView
+        @test scv.color_by == :cell_type
+    end
+
+    # ── SpatialRelation zarr round-trip ───────────────────────────────────────
+
+    @testset "analyze + zarr round-trip" begin
+        path = mktempdir()
+        try
+            ds   = SpatialDataset()
+            ds["cells"] = cells   # attach before analyze so _element_name resolves
+            rel  = analyze(Expression(), pts, cells)
+            rel  = annotate(rel, ["T","B","M"]; key=:cell_type)
+            ds["expr"]  = rel
+            write(ds, path, SpatialDataZarr())
+            close(ds)
+            ds2  = read(SpatialDataZarr(), path)
+            rel2 = relations(ds2, "expr")
+            @test nobs(rel2) == 3
+            @test nvar(rel2) == 2
+            @test rel2.weights ≈ rel.weights  atol=1e-5
+            @test rel2.src == "cells"
+            close(ds2)
+        finally
+            rm(path; recursive=true, force=true)
+        end
+    end
+
+end  # M11
