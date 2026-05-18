@@ -38,7 +38,7 @@ export
     # Views
     SpatialExtent, SpatialROI,
     SpatialElementView, SpatialDatasetView,
-    geometry,
+    geometry, select,
     # Images + Labels
     SpatialImage, SpatialLabels,
     data, nchannels, channel_names, build_pyramid!, images, labels,

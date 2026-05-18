@@ -127,4 +127,84 @@ function Makie.poly!(ax::Makie.Axis, cells::SpatialShapes, rel::SpatialRelation;
     Makie.poly!(ax, ShapeColorView(cells, rel, color_by, colormap); kw...)
 end
 
+# ── Interactive ROI selection ─────────────────────────────────────────────────
+
+# SpatialExtent from current axis limits
+function SpatialOmics.SpatialExtent(ax::Makie.Axis; coord_system::String="")
+    r = ax.finallimits[]
+    o = minimum(r); w = widths(r)
+    SpatialExtent(o[1], o[1]+w[1], o[2], o[2]+w[2]; coord_system)
+end
+
+# Per-axis session state for in-progress polygon drawing
+const _active_roi_sessions = Dict{Makie.Axis, NamedTuple}()
+
+function _teardown_roi!(ax)
+    sess = get(_active_roi_sessions, ax, nothing)
+    sess === nothing && return
+    delete!(ax, sess.preview_lines)
+    delete!(ax, sess.preview_dots)
+    delete!(ax, sess.first_dot)
+    Observables.off(sess.h_mouse)
+    Observables.off(sess.h_key)
+    delete!(_active_roi_sessions, ax)
+end
+
+# Interactive polygon drawing. Left-click adds vertices; click within snap_px of
+# the first vertex (or press Enter) to close. Escape cancels.
+# Returns an Observable — check obs[] after closing.
+function SpatialOmics.select(ax::Makie.Axis, ::Type{SpatialROI};
+                              coord_system::String="", snap_px::Real=10, priority::Int=2)
+    _teardown_roi!(ax)
+
+    result      = Observable{Union{Nothing, SpatialROI}}(nothing)
+    vertices    = Point2f[]
+    preview_pts = Observable(Point2f[])
+    first_pt    = Observable(Point2f[])
+
+    preview_lines = lines!(ax,  preview_pts; color=(:red, 0.7), linewidth=2)
+    preview_dots  = scatter!(ax, preview_pts; color=:red,  markersize=8)
+    first_dot     = scatter!(ax, first_pt;   color=:cyan, markersize=14, marker=:circle)
+
+    function close_polygon!()
+        ring = copy(vertices)
+        first(ring) ≈ last(ring) || push!(ring, ring[1])
+        result[] = SpatialROI(Polygon(ring); coord_system)
+        _teardown_roi!(ax)
+    end
+
+    function update_preview!()
+        preview_pts[] = length(vertices) >= 2 ?
+            vcat(vertices, [vertices[1]]) : copy(vertices)
+        first_pt[] = isempty(vertices) ? Point2f[] : [vertices[1]]
+    end
+
+    h_mouse = on(events(ax.scene).mousebutton, priority=priority) do event
+        is_mouseinside(ax.scene) || return Consume(false)
+        event.action == Mouse.press && event.button == Mouse.left || return Consume(false)
+        if length(vertices) >= 3
+            first_screen = Makie.project(ax.scene, vertices[1])
+            norm(first_screen - Point2f(events(ax.scene).mouseposition[])) < snap_px &&
+                (close_polygon!(); return Consume(false))
+        end
+        push!(vertices, mouseposition(ax))
+        update_preview!()
+        return Consume(false)
+    end
+
+    h_key = on(events(ax.scene).keyboardbutton, priority=priority) do event
+        event.action == Keyboard.press || return Consume(false)
+        if event.key == Keyboard.enter || event.key == Keyboard.kp_enter
+            length(vertices) >= 3 && close_polygon!()
+        elseif event.key == Keyboard.escape
+            result[] = nothing
+            _teardown_roi!(ax)
+        end
+        return Consume(false)
+    end
+
+    _active_roi_sessions[ax] = (; preview_lines, preview_dots, first_dot, h_mouse, h_key)
+    return result
+end
+
 end

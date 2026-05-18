@@ -71,6 +71,25 @@ function _extent_of(geom, cs::String="")
     SpatialExtent(xmin, xmax, ymin, ymax; coord_system=cs)
 end
 
+# ── ROI → SpatialShapes ───────────────────────────────────────────────────────
+# Symmetric with SpatialExtent(shp::SpatialShapes).
+
+function SpatialShapes(ext::SpatialExtent; instance_id::Int32=Int32(1))
+    ring = [Point2f(ext.xmin, ext.ymin), Point2f(ext.xmax, ext.ymin),
+            Point2f(ext.xmax, ext.ymax), Point2f(ext.xmin, ext.ymax),
+            Point2f(ext.xmin, ext.ymin)]
+    SpatialShapes([Polygon(ring)]; instance_id=[instance_id], coord_system=ext.coord_system)
+end
+
+function SpatialShapes(roi::SpatialROI; instance_id::Int32=Int32(1))
+    ring = Vector{Point2f}(GeoInterface.coordinates(roi.geometry)[1])
+    first(ring) ≈ last(ring) || push!(ring, ring[1])
+    SpatialShapes([Polygon(ring)]; instance_id=[instance_id], coord_system=roi.coord_system)
+end
+
+# Stub — method defined in MakieExt when Makie is loaded
+function select end
+
 # ── SpatialElementView ────────────────────────────────────────────────────────
 
 struct SpatialElementView{T, R}

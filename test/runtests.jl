@@ -518,6 +518,52 @@ end
         end
     end
 
+    # ── SpatialShapes(::SpatialExtent) and SpatialShapes(::SpatialROI) ──────────
+
+    @testset "SpatialShapes(SpatialExtent)" begin
+        ext = SpatialExtent(1.0, 3.0, 2.0, 5.0; coord_system="global")
+        s   = SpatialShapes(ext)
+        @test s isa SpatialShapes
+        @test length(s) == 1
+        @test s.instance_id == Int32[1]
+        @test coord_system(s) == "global"
+        ring = GeoInterface.coordinates(s.geometries[1])[1]
+        @test length(ring) == 5
+        @test ring[1] ≈ ring[end]
+        xs = [p[1] for p in ring]; ys = [p[2] for p in ring]
+        @test minimum(xs) ≈ 1.0 && maximum(xs) ≈ 3.0
+        @test minimum(ys) ≈ 2.0 && maximum(ys) ≈ 5.0
+    end
+
+    @testset "SpatialShapes(SpatialROI)" begin
+        ring = [Point2f(0,0), Point2f(2,0), Point2f(1,2), Point2f(0,0)]
+        roi  = SpatialROI(Polygon(ring); coord_system="global")
+        s    = SpatialShapes(roi)
+        @test length(s) == 1
+        @test coord_system(s) == "global"
+        r2 = GeoInterface.coordinates(s.geometries[1])[1]
+        @test r2[1] ≈ r2[end]
+    end
+
+    @testset "SpatialShapes(SpatialExtent) zarr roundtrip" begin
+        ext  = SpatialExtent(0.0, 10.0, 0.0, 10.0; coord_system="global")
+        path = mktempdir()
+        try
+            ds = SpatialDataset()
+            push!(ds, CoordinateSystem("global"))
+            ds["roi"] = SpatialShapes(ext)
+            write!(ds, path, SpatialDataZarr())
+            close(ds)
+            ds2 = read(SpatialDataZarr(), path)
+            s2  = shapes(ds2, "roi")
+            @test length(s2) == 1
+            @test coord_system(s2) == "global"
+            close(ds2)
+        finally
+            rm(path; recursive=true, force=true)
+        end
+    end
+
 end
 
 @testset "SpatialOmics M4" begin
