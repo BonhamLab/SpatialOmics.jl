@@ -12,7 +12,7 @@ makedocs(
     ),
     pages = [
         "Home" => "index.md",
-        "Explanation" => [
+        "Introduction" => [
             "explanation/data_model.md",
             "explanation/coordinate_systems.md",
             "explanation/lazy_views.md",

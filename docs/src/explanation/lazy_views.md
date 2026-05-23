@@ -14,31 +14,31 @@ the view cheaply, pay the cost only when the data is actually needed.
 
 ## SpatialExtent and SpatialROI
 
-`SpatialExtent` is a typed axis-aligned bounding box. It carries `coord_system`
+[`SpatialExtent`](@ref) is a typed axis-aligned bounding box. It carries `coord_system`
 in addition to `xmin/xmax/ymin/ymax`, so the package can catch the common
 mistake of filtering in the wrong coordinate space — a mismatch raises an error
 rather than producing silently wrong results.
 
-`SpatialROI` wraps any GeoInterface-compatible polygon with a cached bounding
+[`SpatialROI`](@ref) wraps any GeoInterface-compatible polygon with a cached bounding
 box. The cache is used as a pre-filter: only points or shapes whose bounding box
 intersects the ROI extent are tested for exact polygon containment, keeping the
 cost proportional to the density of candidates rather than the total dataset
 size.
 
-Both types are accepted by `view`. They can also be converted to `SpatialShapes`
+Both types are accepted by `view`. They can also be converted to [`SpatialShapes`](@ref)
 for visualisation — `SpatialShapes(ext)` produces a rectangular polygon.
 
 ## SpatialElementView and SpatialDatasetView
 
-`view(el, roi)` returns a `SpatialElementView{T, R}` — a struct holding a
+`view(el, roi)` returns a [`SpatialElementView`](@ref) — a struct holding a
 reference to the parent element and the ROI. No data is read, no arrays are
-allocated. The element's accessors — `coords`, `geometries`, `feature_ids`,
-`instance_id`, `count_per_instance` — are all defined on `SpatialElementView`
+allocated. The element's accessors — [`coords`](@ref), [`geometries`](@ref), [`feature_ids`](@ref),
+[`instance_id`](@ref), [`count_per_instance`](@ref) — are all defined on [`SpatialElementView`](@ref)
 and apply the filter on each call.
 
-`view(ds, roi)` returns a `SpatialDatasetView` that applies the same ROI
+`view(ds, roi)` returns a [`SpatialDatasetView`](@ref) that applies the same ROI
 to every element in the dataset. Accessing a specific element via
-`points(dsv, name)` or `images(dsv, name)` returns a `SpatialElementView`
+[`points`](@ref) or [`images`](@ref) returns a [`SpatialElementView`](@ref)
 for that element.
 
 This is the preferred way to build multi-layer plots: define the region once,
@@ -59,11 +59,11 @@ fig
 ## When to use collect
 
 `collect(view(el, roi))` materialises the view into a concrete element — a new
-`SpatialPoints` or `SpatialShapes` with only the filtered rows. Use `collect`
+[`SpatialPoints`](@ref) or [`SpatialShapes`](@ref) with only the filtered rows. Use `collect`
 when:
 
 - You need a standalone element for downstream computation (e.g., passing to
-  `analyze`).
+  [`analyze`](@ref)).
 - You are going to access the filtered data many times and want to avoid
   recomputing the mask on each call.
 

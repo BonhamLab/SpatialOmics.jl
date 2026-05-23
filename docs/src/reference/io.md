@@ -21,7 +21,7 @@ ds = read(SpatialDataZarr(), "/path/to/experiment.zarr")
 # CosMx SMI raw flat-file export
 ds = read(CosMx(), "/path/to/cosmx_export/")
 
-# CosMx with morphology images
+# CosMx with tissue images
 ds = read(CosMx(morphology_dir="/path/to/Morphology2D"), "/path/to/export/")
 ```
 

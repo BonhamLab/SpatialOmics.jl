@@ -17,8 +17,8 @@ images are far too large to hold in memory.
 ## Named coordinate systems as a graph
 
 SpatialOmics models coordinate spaces explicitly as a directed acyclic graph
-(DAG). Each node is a `CoordinateSystem` with a name, axis labels, and units.
-Each edge is an `AbstractTransformation` carrying `src` and `dst` coordinate
+(DAG). Each node is a [`CoordinateSystem`](@ref) with a name, axis labels, and units.
+Each edge is an [`AbstractTransformation`](@ref) carrying `src` and `dst` coordinate
 system names.
 
 ```
@@ -27,7 +27,7 @@ system names.
   ...
 ```
 
-Every element (`SpatialPoints`, `SpatialShapes`, etc.) stores a `coord_system`
+Every element ([`SpatialPoints`](@ref), [`SpatialShapes`](@ref), etc.) stores a [`coord_system`](@ref)
 name. That name places the element at a node in the graph. Elements at different
 nodes are not directly comparable — the package raises an error rather than
 silently misaligning data.
@@ -39,8 +39,8 @@ homogeneous coordinates. This representation lets rotation, scaling, shear, and
 translation be encoded uniformly, and lets sequential transforms be fused by
 matrix multiplication.
 
-The constructor helpers — `translation`, `scaling`, `rotation`, `flip_y` — each
-produce an `Affine` with explicit `src` and `dst` names:
+The constructor helpers — [`translation`](@ref), [`scaling`](@ref), [`rotation`](@ref), [`flip_y`](@ref) — each
+produce an [`Affine`](@ref) with explicit `src` and `dst` names:
 
 ```julia
 t = compose(
@@ -53,26 +53,26 @@ push!(ds, CoordinateSystem("global"))
 push!(ds, t)
 ```
 
-`compose` fuses two `Affine` transforms into one (matrix product), or wraps
-mixed types in a `Sequence`. The `src`/`dst` chain must be consistent —
+[`compose`](@ref) fuses two [`Affine`](@ref) transforms into one (matrix product), or wraps
+mixed types in a [`Sequence`](@ref). The `src`/`dst` chain must be consistent —
 `a.dst == b.src` is enforced.
 
 ## Path resolution
 
-`transform(ds, "pixel", "global")` calls `resolve`, which performs BFS over
+[`transform`](@ref)`(ds, "pixel", "global")` calls [`resolve`](@ref), which performs BFS over
 the transform graph and returns a composed transformation from source to
-destination. `Affine` edges are traversed in both directions (the inverse is
-computed automatically); `Identity` edges are bidirectional by construction.
+destination. [`Affine`](@ref) edges are traversed in both directions (the inverse is
+computed automatically); [`Identity`](@ref) edges are bidirectional by construction.
 
-If the graph has no path between the requested systems, `resolve` raises an
+If the graph has no path between the requested systems, [`resolve`](@ref) raises an
 error listing the known edges — a much clearer signal than a silent wrong
 answer.
 
 ## Why not CoordinateTransformations.jl?
 
 `CoordinateTransformations.jl` is a general-purpose library for function-based
-transforms. SpatialOmics uses its own `Affine` type for two reasons: (1) the
-augmented-matrix representation enables O(1) fusion via `compose`, which matters
+transforms. SpatialOmics uses its own [`Affine`](@ref) type for two reasons: (1) the
+augmented-matrix representation enables O(1) fusion via [`compose`](@ref), which matters
 when resolving paths through multi-hop graphs at load time; (2) every
 transformation carries explicit `src` and `dst` names, making the graph
 structure first-class rather than implicit in calling code.

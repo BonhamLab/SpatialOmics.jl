@@ -2,7 +2,7 @@
 
 A Julia library for loading, representing, and analysing spatial transcriptomics
 data. It provides a common data model for multi-modal spatial experiments —
-transcripts, cell boundaries, morphology images, segmentation masks, and
+transcripts, cell boundaries, tissue images, segmentation masks, and
 expression matrices — alongside lazy spatial views, a multi-FOV coordinate
 system graph, and SpatialData OME-Zarr interoperability with Python tools.
 

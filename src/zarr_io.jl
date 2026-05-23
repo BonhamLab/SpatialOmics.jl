@@ -749,7 +749,7 @@ end
 Format token for loading a CosMx SMI raw flat-file export.
 
 Pass to `read` to load a CosMx export directory. If `morphology_dir` points to
-a Morphology2D tile directory, morphology images are stitched and included as a
+a Morphology2D tile directory, tissue images are stitched and included as a
 `SpatialImage`; otherwise only transcripts and cell boundaries are loaded.
 
 ```julia

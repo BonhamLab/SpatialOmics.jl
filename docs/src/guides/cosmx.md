@@ -1,7 +1,7 @@
 # CosMx workflow
 
 CosMx SMI exports a flat-file directory with per-FOV transcripts, cell
-segmentation polygons, and optional Morphology2D TIF tiles.
+segmentation polygons, and optional tissue images (Morphology2D TIF tiles).
 
 ## Loading
 
@@ -11,7 +11,7 @@ using SpatialOmics
 # Basic load — transcripts and cell boundaries only
 ds = read(CosMx(), "/path/to/cosmx_export/")
 
-# Include morphology images (stitched from per-FOV TIF tiles)
+# Include tissue images (stitched from Morphology2D TIF tiles)
 ds = read(CosMx(morphology_dir="/path/to/Morphology2D"), "/path/to/cosmx_export/")
 
 # Cache to disk for faster subsequent loads
@@ -79,7 +79,7 @@ roi = view(ds, ext)
 fig = Figure(size=(600, 600))
 ax  = Axis(fig[1, 1]; aspect=DataAspect(), yreversed=true)
 
-# Morphology — rescaled for display
+# Tissue image — rescaled for display
 heatmap!(ax, scaleminmax(channel(images(roi, "morphology"), 1)); colormap=:grays)
 # Cell boundaries
 poly!(ax, shapes(roi, "cell_boundaries"); color=:transparent, strokecolor=:cyan, strokewidth=0.3)
