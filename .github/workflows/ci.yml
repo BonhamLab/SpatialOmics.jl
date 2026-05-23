@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         version:
-          - "1.10"   # min compat
+          - "1.12"   # min compat
           - "1"      # latest stable
         os:
           - ubuntu-latest
