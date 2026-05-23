@@ -16,6 +16,7 @@ using MappedArrays: mappedarray
 using Colors: Colorant, Gray, RGB
 using Random: randperm
 import ImageBase.ImageCore: colorview
+using Images: load
 
 export
     # Coordinate systems
@@ -31,6 +32,7 @@ export
     with_dataset, keep!,
     # Elements
     SpatialPoints, SpatialShapes, SpatialShape,
+    Polygon, Point2f,
     points, shapes,
     coords, features, feature_ids, coord_system,
     geometries, instance_id, instance_ids,

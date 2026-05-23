@@ -1,5 +1,27 @@
 # ── SpatialImage ──────────────────────────────────────────────────────────────
 
+"""
+    SpatialImage{T, N}
+
+N-dimensional raster image in a named coordinate system, optionally with
+pre-computed pyramid levels.
+
+The image data array has axes labelled by `axes` — a tuple of symbols such as
+`(:c, :y, :x)` for a 3-D multi-channel image or `(:y, :x)` for a 2-D image.
+The `pixel_to_cs` transformation maps pixel-space indices to the physical
+coordinate system. Pyramid levels (coarser sub-sampled copies) are stored in
+`pyramid` and can be built with `build_pyramid!`.
+
+A `display_transform` (e.g. from `scaleminmax`) is applied after data
+materialisation at render time, never wrapped around Zarr arrays.
+
+# Constructors
+    SpatialImage(data; axes, channel_names, coord_system, pixel_to_cs, pyramid, display_transform)
+
+# See also
+[`SpatialLabels`](@ref), [`channel`](@ref), [`scaleminmax`](@ref),
+[`build_pyramid!`](@ref), [`colorview`](@ref)
+"""
 mutable struct SpatialImage{T, N}
     data              :: AbstractArray{T, N}
     pyramid           :: Vector{AbstractArray{T, N}}   # coarser levels; empty until built
@@ -31,10 +53,34 @@ end
 
 # ── Accessors ──────────────────────────────────────────────────────────────────
 
+"""
+    data(img) → AbstractArray
+
+Return the underlying data array of a `SpatialImage` or `SpatialLabels`.
+May be a Zarr-backed `DiskArray` — use `Array(data(img))` to force a full read.
+"""
 data(img::SpatialImage)          = img.data
+
+"""
+    channel_names(img) → Vector{String}
+
+Return the channel names of a `SpatialImage`. Empty if names were not set.
+
+# See also
+[`nchannels`](@ref), [`channel`](@ref)
+"""
 channel_names(img::SpatialImage) = img.channel_names
 coord_system(img::SpatialImage)  = img.coord_system
 
+"""
+    nchannels(img) → Int
+
+Return the number of channels in a `SpatialImage`. Returns `1` for 2-D images
+with no channel axis.
+
+# See also
+[`channel_names`](@ref), [`channel`](@ref)
+"""
 function nchannels(img::SpatialImage)
     idx = findfirst(==(:c), img.axes)
     idx === nothing ? 1 : size(img.data, idx)
@@ -49,6 +95,19 @@ function _spatial_dims(axes::NTuple{N, Symbol}) where N
     Tuple(i for (i, a) in enumerate(axes) if a in (:x, :y, :z))
 end
 
+"""
+    build_pyramid!(img, n_levels=3) → img
+
+Build a Gaussian downsampling pyramid in-place, storing `n_levels` progressively
+coarser arrays in `img.pyramid`.
+
+Each level halves the spatial resolution along the `:x` and `:y` axes using
+`ImageBase.restrict`. The channel axis (`:c`) is not downsampled. Existing
+pyramid levels are discarded before building.
+
+# See also
+[`scaleminmax`](@ref), [`channel`](@ref)
+"""
 function build_pyramid!(img::SpatialImage, n_levels::Int=3)
     empty!(img.pyramid)
     sdims   = _spatial_dims(img.axes)
@@ -62,6 +121,22 @@ end
 
 # ── SpatialLabels ─────────────────────────────────────────────────────────────
 
+"""
+    SpatialLabels{T<:Integer, N}
+
+Integer segmentation mask in a named coordinate system, where each pixel value
+identifies an object instance.
+
+The `instance_map` dictionary maps raw pixel label values to canonical
+`instance_id` values, matching the convention used in `SpatialPoints` and
+`SpatialShapes`. Use `instance_ids(lbl)` to list all non-background instances.
+
+# Constructors
+    SpatialLabels(data; axes, instance_map, coord_system, pixel_to_cs)
+
+# See also
+[`SpatialImage`](@ref), [`instance_ids`](@ref), [`data`](@ref)
+"""
 struct SpatialLabels{T<:Integer, N}
     data         :: AbstractArray{T, N}
     axes         :: NTuple{N, Symbol}
@@ -79,17 +154,47 @@ function SpatialLabels(data::AbstractArray{T, N};
 end
 
 coord_system(lbl::SpatialLabels)  = lbl.coord_system
+
+"""
+    instance_ids(lbl) → Vector{Int32}
+
+Return the sorted list of unique instance IDs present in a `SpatialLabels` mask.
+
+Does not include the background (pixels not in `instance_map`).
+
+# See also
+[`instance_id`](@ref), [`SpatialLabels`](@ref)
+"""
 instance_ids(lbl::SpatialLabels)  = sort(unique(values(lbl.instance_map)))
 Base.size(lbl::SpatialLabels)     = size(lbl.data)
 
 # ── Dataset typed accessors ────────────────────────────────────────────────────
 
+"""
+    images(ds, name) → SpatialImage
+    images(v, name) → SpatialImage  (cropped to view extent)
+
+Retrieve the named `SpatialImage` from a dataset or dataset view.
+Raises an error if the element is not a `SpatialImage`.
+
+# See also
+[`labels`](@ref), [`points`](@ref), [`shapes`](@ref)
+"""
 function images(ds::SpatialDataset, name::String)
     el = ds.elements[name]
     el isa SpatialImage || error("Element \"$name\" is not SpatialImage (got $(typeof(el)))")
     el
 end
 
+"""
+    labels(ds, name) → SpatialLabels
+
+Retrieve the named `SpatialLabels` from a dataset or dataset view.
+Raises an error if the element is not a `SpatialLabels`.
+
+# See also
+[`images`](@ref), [`instance_ids`](@ref)
+"""
 function labels(ds::SpatialDataset, name::String)
     el = ds.elements[name]
     el isa SpatialLabels || error("Element \"$name\" is not SpatialLabels (got $(typeof(el)))")
@@ -98,6 +203,18 @@ end
 
 # ── channel — lazy 2D slice extraction ────────────────────────────────────────
 
+"""
+    channel(img, ch) → SpatialImage
+
+Return a lazy view of a single channel from a multi-channel `SpatialImage`.
+
+`ch` can be an `Int` (1-based channel index) or a `String` (channel name from
+`channel_names(img)`). The result is a 2-D `SpatialImage` with the channel axis
+removed. Pyramid levels are sliced correspondingly.
+
+# See also
+[`nchannels`](@ref), [`channel_names`](@ref), [`colorview`](@ref)
+"""
 function channel(img::SpatialImage{T,N}, ch::Int) where {T,N}
     ci = findfirst(==(:c), img.axes)
     ci === nothing && return img
@@ -117,10 +234,20 @@ function channel(img::SpatialImage, ch::String)
 end
 
 # ── scaleminmax — lazy display-time intensity rescaling ────────────────────────
-# Computes extrema from the coarsest pyramid level (fast: one bulk Array() read),
-# stores the scalar map as display_transform for application after zarr materialisation.
-# Does NOT wrap zarr arrays in any lazy transform — that path is catastrophically slow.
 
+"""
+    scaleminmax(img) → SpatialImage
+
+Return a copy of `img` with a min-max intensity rescaling transform set as its
+`display_transform`.
+
+The intensity range is sampled from the coarsest pyramid level (a fast single
+bulk read). The transform is applied after Zarr materialisation at display
+time — it is never wrapped around lazy disk arrays.
+
+# See also
+[`channel`](@ref), [`colorview`](@ref), [`build_pyramid!`](@ref)
+"""
 function scaleminmax(img::SpatialImage)
     src      = isempty(img.pyramid) ? img.data : img.pyramid[end]
     mn, mx   = Float32.(extrema(Array(src)))
@@ -157,10 +284,20 @@ _scale_pixel_transform(t::Sequence, scale::Float64) =
     Sequence([_scale_pixel_transform(t.steps[1], scale); t.steps[2:end]], t.src, t.dst)
 
 # ── SpatialImageColorView ─────────────────────────────────────────────────────
-# Display-only wrapper: raw source data + colorant type + optional display transform.
-# The transform (if any) is applied AFTER zarr materialisation — never wrapping zarr arrays.
-# Produced by colorview(CT, ::SpatialImage[, ch]) or colorview(CT, ::SpatialImage...).
 
+"""
+    SpatialImageColorView{C<:Colorant, T, N}
+
+Display-only wrapper that pairs a `SpatialImage` with a colorant type and an
+optional scalar display transform.
+
+Produced by `colorview(CT, img)`, `colorview(CT, img, ch)`, or
+`colorview(CT, img1, img2, ...)` for RGB composites. The `display_transform`
+(if any) is applied after Zarr materialisation, never wrapping disk arrays.
+
+# See also
+[`colorview`](@ref), [`scaleminmax`](@ref), [`channel`](@ref)
+"""
 struct SpatialImageColorView{C<:Colorant, T, N}
     data         :: AbstractArray{T, N}          # raw data (may be zarr-backed)
     pyramid      :: Vector{AbstractArray{T, N}}  # raw pyramid levels (may be zarr-backed)
@@ -173,6 +310,24 @@ end
 
 # ── colorview extensions ───────────────────────────────────────────────────────
 
+"""
+    colorview(CT, img) → SpatialImageColorView
+    colorview(CT, img, ch) → SpatialImageColorView
+    colorview(CT, img1, img2, ...) → SpatialImageColorView
+
+Wrap one or more `SpatialImage` objects with colorant type `CT` for display.
+
+Single-image forms extract `channel(img, 1)` if `img` is multi-channel unless
+`ch` is specified. The multi-image form creates an RGB (or N-channel) composite;
+all inputs must be 2-D (call `channel` first).
+
+```julia
+cview = colorview(Gray, scaleminmax(channel(img, 1)))
+```
+
+# See also
+[`SpatialImageColorView`](@ref), [`channel`](@ref), [`scaleminmax`](@ref)
+"""
 function colorview(CT::Type{<:Colorant}, img::SpatialImage)
     ndims(img.data) > 2 ? _spatial_colorview(CT, channel(img, 1)) :
                           _spatial_colorview(CT, img)

@@ -1,6 +1,38 @@
 
 # ── SpatialPoints ─────────────────────────────────────────────────────────────
 
+"""
+    SpatialPoints{T<:AbstractFloat}
+
+Point cloud of 2-D spatial observations — transcripts, centroids, or other
+coordinates in a named coordinate system.
+
+Stored as parallel arrays (struct-of-arrays layout). Feature labels (gene names,
+cell types, etc.) are encoded as integer indices into a compact `feature_codebook`
+for O(1) lookup by name via `coords(pts, feature)`.
+
+# Constructors
+
+    SpatialPoints(coords; feature_id, feature_codebook, instance_id, coord_system)
+
+Bare coordinates constructor. `coords` is a `Vector{Point{2,T}}`.
+
+    SpatialPoints(table; x=:x, y=:y, gene=nothing, coord_system="")
+
+Tables.jl constructor. Reads x/y from columns named by `x` and `y`; optionally
+encodes a gene/label column via `gene`.
+
+```julia
+pts = SpatialPoints(df; x=:x_centroid, y=:y_centroid, gene=:target, coord_system="global")
+length(pts)          # number of points
+features(pts)        # gene names in codebook order
+coords(pts, "Epcam") # coordinates of all Epcam transcripts
+```
+
+# See also
+[`coords`](@ref), [`features`](@ref), [`feature_ids`](@ref),
+[`instance_id`](@ref), [`subsample`](@ref), [`top_features`](@ref)
+"""
 mutable struct SpatialPoints{T<:AbstractFloat}
     coords           :: Vector{Point{2,T}}
     feature_id       :: Vector{Int32}
@@ -45,10 +77,62 @@ end
 Base.length(pts::SpatialPoints) = length(pts.coords)
 
 # Public accessors — field names are implementation detail
+
+"""
+    coords(pts) → Vector{Point{2,T}}
+    coords(pts, feature) → Vector{Point{2,T}}
+
+Return all coordinates in `pts`, or only those whose feature label matches `feature`.
+
+The single-argument form returns the full coordinate vector. The two-argument
+form performs an O(n) filter using the integer codebook index; raises an error
+if `feature` is not in the codebook.
+
+# See also
+[`features`](@ref), [`feature_ids`](@ref)
+"""
 coords(pts::SpatialPoints)       = pts.coords
+
+"""
+    features(pts) → Vector{String}
+
+Return the feature codebook — the unique feature labels (gene names, cell types, …)
+present in `pts`, in the order used by `feature_ids`.
+"""
 features(pts::SpatialPoints)     = pts.feature_codebook
+
+"""
+    coord_system(el) → String
+
+Return the name of the coordinate system that `el` belongs to.
+
+Defined for `SpatialPoints`, `SpatialShapes`, `SpatialImage`, `SpatialLabels`,
+`SpatialExtent`, `SpatialROI`, and their view types.
+"""
 coord_system(pts::SpatialPoints) = pts.coord_system
+
+"""
+    feature_ids(pts) → Vector{Int32}
+
+Return the per-point feature index vector. Each value is a 1-based index into
+`features(pts)`; `0` means unlabelled.
+
+# See also
+[`features`](@ref), [`coords`](@ref)
+"""
 feature_ids(pts::SpatialPoints)  = pts.feature_id
+
+"""
+    instance_id(el) → Vector{Int32}
+    instance_id(shape) → Int32
+
+Return per-observation instance IDs for a collection, or the single instance
+ID for a `SpatialShape` row. `0` means unassigned (transcript not inside any
+cell, or shape not assigned to a region).
+
+# See also
+[`instance_ids`](@ref), [`count_per_instance`](@ref)
+"""
 instance_id(pts::SpatialPoints)  = pts.instance_id
 
 # Filtered coords by feature name — hides the integer-index encoding from users
@@ -67,6 +151,25 @@ GeoInterface.getgeom(::GeoInterface.MultiPointTrait, pts::SpatialPoints, i::Int)
 
 # ── SpatialShapes ─────────────────────────────────────────────────────────────
 
+"""
+    SpatialShapes{G<:AbstractGeometry}
+
+Collection of 2-D geometries (typically cell boundary polygons) in a named
+coordinate system. Each shape carries an `instance_id` linking it to cells
+or objects in a `SpatialRelation`.
+
+Implements the GeoInterface `GeometryCollectionTrait`, making it compatible
+with GeometryOps operations directly.
+
+# Constructors
+    SpatialShapes(geometries; instance_id, coord_system)
+
+    SpatialShapes(ext::SpatialExtent)        # rectangular region
+    SpatialShapes(roi::SpatialROI)           # polygon region
+
+# See also
+[`geometries`](@ref), [`instance_id`](@ref), [`SpatialROI`](@ref), [`SpatialPoints`](@ref)
+"""
 mutable struct SpatialShapes{G<:AbstractGeometry}
     geometries   :: Vector{G}
     instance_id  :: Vector{Int32}
@@ -84,6 +187,18 @@ Base.length(shp::SpatialShapes) = length(shp.geometries)
 
 # ── Row type ──────────────────────────────────────────────────────────────────
 
+"""
+    SpatialShape{G<:AbstractGeometry}
+
+Single-shape row accessor produced by indexing into a `SpatialShapes` collection.
+
+Carries the geometry, its `instance_id`, and the coordinate system name.
+Row-accessor and collection share the same field names (`geometry`, `instance_id`,
+`coord_system`) so code generalises across both.
+
+# See also
+[`SpatialShapes`](@ref), [`geometry`](@ref)
+"""
 struct SpatialShape{G<:AbstractGeometry}
     geometry     :: G
     instance_id  :: Int32
@@ -103,7 +218,14 @@ function Base.filter(pred, shp::SpatialShapes{G}) where G
                   coord_system = shp.coord_system)
 end
 
-# Accessors
+"""
+    geometries(shp) → Vector{G}
+
+Return the vector of geometries from a `SpatialShapes` collection.
+
+# See also
+[`SpatialShapes`](@ref), [`geometry`](@ref)
+"""
 geometries(shp::SpatialShapes)   = shp.geometries
 instance_id(shp::SpatialShapes)  = shp.instance_id
 instance_id(s::SpatialShape)     = s.instance_id
@@ -141,6 +263,18 @@ function apply(t::AbstractTransformation, pts::SpatialPoints{T}) where T
                      copy(pts.instance_id), t.dst, nothing)
 end
 
+"""
+    apply!(t, el) → el
+
+Apply transformation `t` to `el` in-place, mutating coordinates and updating
+the element's `coord_system` to `t.dst`. Returns `el`.
+
+Defined for `SpatialPoints` and `SpatialShapes`. Prefer `apply` (non-mutating)
+when the element is attached to a dataset.
+
+# See also
+[`apply`](@ref)
+"""
 function apply!(t::AbstractTransformation, pts::SpatialPoints{T}) where T
     map!(pts.coords, pts.coords) do p
         v = apply(t, p)
@@ -198,8 +332,29 @@ end
 Base.copy(shp::SpatialShapes{G}) where G =
     SpatialShapes{G}(copy(shp.geometries), copy(shp.instance_id), shp.coord_system, nothing)
 
+"""
+    instance_ids(pts) → Vector{Int32}
+
+Return the per-point instance ID vector for a `SpatialPoints` collection.
+
+Alias for `instance_id(pts)` provided for consistency with
+`instance_ids(lbl::SpatialLabels)`. `0` means unassigned.
+"""
+instance_ids(pts::SpatialPoints) = pts.instance_id
+
 # ── subsample ─────────────────────────────────────────────────────────────────
 
+"""
+    subsample(pts, n) → SpatialPoints
+
+Return a new `SpatialPoints` with a random subset of `n` observations.
+
+If `n ≥ length(pts)`, the original object is returned unchanged.
+The feature codebook is preserved; indices are rebuilt from the subset.
+
+# See also
+[`top_features`](@ref)
+"""
 function subsample(pts::SpatialPoints{T}, n::Int) where T
     n >= length(pts) && return pts
     idx = sort!(randperm(length(pts))[1:n])
@@ -208,8 +363,17 @@ function subsample(pts::SpatialPoints{T}, n::Int) where T
 end
 
 # ── top_features ──────────────────────────────────────────────────────────────
-# Returns gene names sorted by descending transcript count.
 
+"""
+    top_features(pts, n=10) → Vector{String}
+
+Return the `n` most frequent feature names in `pts`, sorted by descending count.
+
+Returns an empty vector if `pts` has no feature codebook.
+
+# See also
+[`count_per_instance`](@ref), [`features`](@ref)
+"""
 function top_features(pts::SpatialPoints, n::Int=10)
     cb = pts.feature_codebook
     isempty(cb) && return String[]
@@ -219,8 +383,18 @@ function top_features(pts::SpatialPoints, n::Int=10)
 end
 
 # ── count_per_instance ────────────────────────────────────────────────────────
-# Returns Dict mapping instance_id → transcript count; 0 (unassigned) excluded.
 
+"""
+    count_per_instance(pts) → Dict{Int32, Int}
+
+Return a dictionary mapping each non-zero instance ID to its observation count.
+
+Unassigned points (`instance_id == 0`) are excluded. Useful for computing
+transcript counts per cell or density metrics.
+
+# See also
+[`instance_id`](@ref), [`top_features`](@ref)
+"""
 function count_per_instance(pts::SpatialPoints)
     counts = Dict{Int32, Int}()
     for id in pts.instance_id
@@ -232,12 +406,32 @@ end
 
 # ── Typed dataset accessors ───────────────────────────────────────────────────
 
+"""
+    points(ds, name) → SpatialPoints
+    points(v, name) → SpatialElementView{SpatialPoints}
+
+Retrieve the named `SpatialPoints` element from a dataset or dataset view.
+Raises an error if the element exists but is not `SpatialPoints`.
+
+# See also
+[`shapes`](@ref), [`images`](@ref), [`labels`](@ref), [`elements`](@ref)
+"""
 function points(ds::SpatialDataset, name::String)
     el = ds.elements[name]
     el isa SpatialPoints || error("Element \"$name\" is not SpatialPoints (got $(typeof(el)))")
     el
 end
 
+"""
+    shapes(ds, name) → SpatialShapes
+    shapes(v, name) → SpatialElementView{SpatialShapes}
+
+Retrieve the named `SpatialShapes` element from a dataset or dataset view.
+Raises an error if the element exists but is not `SpatialShapes`.
+
+# See also
+[`points`](@ref), [`images`](@ref), [`labels`](@ref)
+"""
 function shapes(ds::SpatialDataset, name::String)
     el = ds.elements[name]
     el isa SpatialShapes || error("Element \"$name\" is not SpatialShapes (got $(typeof(el)))")

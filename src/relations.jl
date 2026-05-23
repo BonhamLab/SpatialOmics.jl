@@ -1,31 +1,103 @@
 # ── RelationKind hierarchy ────────────────────────────────────────────────────
-# Each kind is a singleton type so dispatch works: thing(rel) = thing(rel, rel.kind)
 
+"""
+    RelationKind
+
+Abstract supertype for relation-kind dispatch tokens.
+
+Concrete subtypes — [`Membership`](@ref), [`Proximity`](@ref), [`KNN`](@ref),
+[`Expression`](@ref) — are passed to `analyze` to select the algorithm, and
+stored in the resulting `SpatialRelation` to enable re-dispatch.
+"""
 abstract type RelationKind end
 
-# Membership{strict}: point/shape assigned to a containing shape
-#   strict=false (default) — centroid-in-polygon or any overlap
-#   strict=true            — full geometric containment
+"""
+    Membership(; strict=false)
+    Membership{strict}
+
+Assignment of source observations to containing destination shapes.
+
+- `strict=false` (default): containment is tested by point-in-polygon for
+  transcripts, or centroid-in-polygon for cell shapes.
+- `strict=true`: full geometric containment is required.
+
+# See also
+[`analyze`](@ref), [`SpatialRelation`](@ref)
+"""
 struct Membership{strict} <: RelationKind end
 Membership(; strict::Bool=false) = Membership{strict}()
 
-# Proximity: continuous pairwise distance matrix (symmetric, n×n)
-# Boolean within-r case: apply weights .< r after the fact
+"""
+    Proximity()
+
+Relation kind for a pairwise distance matrix between elements.
+
+The `weights` field of the resulting `SpatialRelation` is a symmetric N×N
+`Float32` matrix of centroid distances. Boolean within-radius queries can be
+derived as `weights .< r`.
+
+# See also
+[`distances`](@ref), [`KNN`](@ref)
+"""
 struct Proximity <: RelationKind end
 
-# KNN: k-nearest-neighbor graph between elements of the same collection
-# weights :: Matrix{Float32} n×k, dst_ids is flat length n*k edge list
+"""
+    KNN(; k=30)
+
+Relation kind for a k-nearest-neighbour graph.
+
+The resulting `SpatialRelation` has a N×k weight matrix and a flat N*k
+`dst_ids` edge list. Requires a NearestNeighbors.jl backend:
+`using NearestNeighbors`.
+
+# See also
+[`Proximity`](@ref), [`analyze`](@ref)
+"""
 struct KNN <: RelationKind
     k :: Int
 end
 KNN(; k::Int = 30) = KNN(k)
 
-# Expression: bipartite weighted relation (cells × genes count matrix)
-# replaces the former SpatialTable type
+"""
+    Expression()
+
+Relation kind for a cell × gene transcript count matrix.
+
+Produced by `analyze(Expression(), pts, cells)`, which assigns each transcript
+to the cell containing it and accumulates counts. The `weights` field is a
+`Float32` matrix of shape (n_cells × n_genes); `var` holds a named tuple with
+a `:name` column of gene names.
+
+# See also
+[`analyze`](@ref), [`nobs`](@ref), [`nvar`](@ref), [`var_names`](@ref)
+"""
 struct Expression <: RelationKind end
 
 # ── SpatialRelation ───────────────────────────────────────────────────────────
 
+"""
+    SpatialRelation{K<:RelationKind, W}
+
+Weighted relation between two named spatial elements.
+
+The relation kind `K` determines the semantics: `Expression` is a bipartite
+cell × gene count matrix; `Membership` is a source-to-destination assignment;
+`Proximity` and `KNN` are graph structures.
+
+- `src`, `dst`: element names in the parent dataset
+- `src_ids`, `dst_ids`: `instance_id` vectors identifying the rows/nodes
+- `weights`: the relation data (`Matrix{Float32}` or `nothing`)
+- `obs`: per-row metadata (Tables.jl-compatible)
+- `var`: per-column metadata (for `Expression`: gene names via `:name`)
+- `kind`: the `RelationKind` singleton
+
+# Constructors
+    SpatialRelation(kind, src, dst, src_ids, dst_ids, weights=nothing; obs)
+    SpatialRelation(Expression(), src, src_ids, weights; obs, var)
+
+# See also
+[`analyze`](@ref), [`annotate`](@ref), [`nobs`](@ref), [`nvar`](@ref), [`var_names`](@ref)
+"""
 struct SpatialRelation{K<:RelationKind, W}
     src     :: String                    # source element name in ds.elements
     dst     :: Union{String, Nothing}    # dest element name; Nothing for Expression
@@ -64,12 +136,37 @@ end
 
 # ── Accessors ─────────────────────────────────────────────────────────────────
 
+"""
+    nobs(rel) → Int
+
+Return the number of source observations (rows) in a `SpatialRelation`.
+"""
 nobs(rel::SpatialRelation) = length(rel.src_ids)
 
+"""
+    nvar(rel) → Int
+
+Return the number of variables (columns) in an `Expression` relation.
+Returns `0` for other relation kinds.
+
+# See also
+[`var_names`](@ref), [`nobs`](@ref)
+"""
 function nvar(rel::SpatialRelation{Expression})
     isnothing(rel.weights) ? 0 : size(rel.weights, 2)
 end
 
+"""
+    var_names(rel) → Vector{String}
+
+Return gene or variable names for an `Expression` relation.
+
+Uses the `:name` column from `rel.var` if present; otherwise returns
+string-formatted column indices.
+
+# See also
+[`nvar`](@ref), [`annotate`](@ref)
+"""
 function var_names(rel::SpatialRelation{Expression})
     t = Tables.columns(rel.var)
     Tables.columnnames(t) !== () && hasproperty(t, :name) ?
@@ -78,6 +175,21 @@ end
 
 # ── annotate — pure: returns new SpatialRelation with obs column added ────────
 
+"""
+    annotate(rel, labels; key::Symbol) → SpatialRelation
+
+Return a new `SpatialRelation` with `labels` added as column `key` in `rel.obs`.
+
+Pure — does not modify `rel`. `labels` must have length equal to `nobs(rel)`.
+
+```julia
+types = assign_cell_types(rel)
+rel2  = annotate(rel, types; key=:cell_type)
+```
+
+# See also
+[`SpatialRelation`](@ref), [`nobs`](@ref)
+"""
 function annotate(rel::SpatialRelation, labels::AbstractVector; key::Symbol)
     length(labels) == nobs(rel) ||
         error("labels length ($(length(labels))) ≠ nobs(rel) ($(nobs(rel)))")

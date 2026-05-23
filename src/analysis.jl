@@ -6,6 +6,32 @@ _element_name(::Any) = ""
 
 # ── Default dispatch — token inferred from argument types ─────────────────────
 
+"""
+    analyze(kind, args...) → SpatialRelation
+    analyze(pts::SpatialPoints, cells::SpatialShapes)      → Expression relation
+    analyze(src::SpatialShapes, dst::SpatialShapes)        → Membership relation
+    analyze(rel::SpatialRelation{Expression}; k=30)        → KNN relation
+
+Compute a spatial relation between elements.
+
+Dispatch on the `RelationKind` token selects the algorithm:
+
+- `analyze(Expression(), pts, cells)` — count transcripts per gene per cell.
+  Each transcript is assigned to the first containing cell (bounding-box
+  pre-filter, then exact point-in-polygon). Returns an n_cells × n_genes
+  count matrix.
+- `analyze(Membership(), src, dst)` — assign each point or shape in `src`
+  to the containing shape in `dst`. `strict=true` requires full containment;
+  default uses centroid or point containment.
+- `analyze(KNN(k), rel)` — k-nearest-neighbour graph on an `Expression`
+  relation. Requires `using NearestNeighbors`.
+
+The two-argument forms (`pts, cells` and `src, dst`) infer the kind from
+argument types and call the explicit form.
+
+# See also
+[`SpatialRelation`](@ref), [`Expression`](@ref), [`Membership`](@ref), [`KNN`](@ref), [`distances`](@ref)
+"""
 analyze(pts::SpatialPoints, cells::SpatialShapes) = analyze(Expression(), pts, cells)
 analyze(src::SpatialShapes, dst::SpatialShapes)   = analyze(Membership(), src, dst)
 analyze(rel::SpatialRelation{Expression}; k::Int=30) = analyze(KNN(k), rel)
@@ -97,6 +123,19 @@ end
 
 # ── distances ─────────────────────────────────────────────────────────────────
 
+"""
+    distances(shapes_a, shapes_b) → Vector{Float32}
+    distances(shapes, roi) → Vector{Float32}
+
+Compute the minimum distance from each shape in `shapes_a` to the nearest shape
+in `shapes_b` (or to a `SpatialROI` boundary), using centroid-to-shape
+signed distance.
+
+Returns a `Float32` vector of length `length(shapes_a)`.
+
+# See also
+[`analyze`](@ref), [`Proximity`](@ref)
+"""
 function distances(shapes_a::SpatialShapes, shapes_b::SpatialShapes) :: Vector{Float32}
     n = length(shapes_a)
     m = length(shapes_b)
@@ -120,17 +159,52 @@ end
 
 # ── PointDensity ──────────────────────────────────────────────────────────────
 
+"""
+    PointDensity
+
+Lazy density estimate descriptor for a `SpatialPoints` collection.
+
+Produced by `density(pts; resolution, feature)`. Passed to Makie plot verbs to
+render a rasterised kernel density map at display time.
+
+# See also
+[`density`](@ref)
+"""
 struct PointDensity
     pts        :: SpatialPoints
     resolution :: Int
     feature    :: Union{String, Nothing}
 end
 
+"""
+    density(pts; resolution=512, feature=nothing) → PointDensity
+
+Create a lazy density estimate descriptor for `pts`.
+
+`resolution` sets the output grid size (pixels along the longer axis).
+`feature` restricts density computation to a single feature label; `nothing`
+uses all points.
+
+# See also
+[`PointDensity`](@ref)
+"""
 density(pts::SpatialPoints; resolution::Int=512, feature::Union{String,Nothing}=nothing) =
     PointDensity(pts, resolution, feature)
 
 # ── ShapeColorView ────────────────────────────────────────────────────────────
 
+"""
+    ShapeColorView
+
+Display descriptor that pairs a `SpatialShapes` collection with per-shape color
+values from a `SpatialRelation`.
+
+Passed to Makie's `poly!` to render shapes coloured by an expression or other
+quantitative measure.
+
+# See also
+[`SpatialShapes`](@ref), [`SpatialRelation`](@ref)
+"""
 struct ShapeColorView
     shapes   :: SpatialShapes
     rel      :: SpatialRelation

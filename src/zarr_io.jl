@@ -1,5 +1,23 @@
 # ── Format token ──────────────────────────────────────────────────────────────
 
+"""
+    SpatialDataZarr()
+
+Format token for the native SpatialData OME-Zarr on-disk format.
+
+Pass to `read` or `write!` to select this backend:
+
+```julia
+ds = read(SpatialDataZarr(), "/path/to/experiment.zarr")
+write!(ds, "/path/to/output.zarr", SpatialDataZarr())
+```
+
+`read` auto-detects whether the Zarr store was written by Python's SpatialData
+library or by this package and dispatches accordingly.
+
+# See also
+[`CosMx`](@ref), [`write!`](@ref)
+"""
 struct SpatialDataZarr end
 
 # ── Low-level zarr helpers ─────────────────────────────────────────────────────
@@ -18,11 +36,14 @@ function _write_zarr_array(grp_path::String, name::String, arr::AbstractVector{T
     z[:] = arr
 end
 
+const _ZARR_CHUNK_SIZE = 512
+
 function _write_zarr_array(grp_path::String, name::String, arr::AbstractMatrix{T}) where T
     rm(joinpath(grp_path, name); recursive=true, force=true)
     m, n = size(arr)
     z = zcreate(T, m, n; path=grp_path, name, zarr_format=3,
-                chunks=(m, n), fill_value=zero(T))
+                chunks=(min(_ZARR_CHUNK_SIZE, m), min(_ZARR_CHUNK_SIZE, n)),
+                fill_value=zero(T))
     z[:, :] = arr
 end
 
@@ -30,7 +51,8 @@ function _write_zarr_array(grp_path::String, name::String, arr::AbstractArray{T,
     rm(joinpath(grp_path, name); recursive=true, force=true)
     a, b, c = size(arr)
     z = zcreate(T, a, b, c; path=grp_path, name, zarr_format=3,
-                chunks=(a, b, c), fill_value=zero(T))
+                chunks=(a, min(_ZARR_CHUNK_SIZE, b), min(_ZARR_CHUNK_SIZE, c)),
+                fill_value=zero(T))
     z[:, :, :] = arr
 end
 
@@ -374,7 +396,19 @@ function Base.write(ds::SpatialDataset, path::String, ::SpatialDataZarr)
     _write_dataset_zarr(ds, path)
 end
 
-# write! — write AND update backing store location
+"""
+    write!(ds, path, SpatialDataZarr()) → ds
+
+Write `ds` to the SpatialData OME-Zarr format at `path` and update the
+dataset's backing store to point at the new location.
+
+Unlike the non-mutating `write`, `write!` marks the backing store as permanent
+(non-owned) so the directory is not deleted when `ds` is garbage collected.
+Use this as the canonical "save" operation.
+
+# See also
+[`SpatialDataZarr`](@ref), [`keep!`](@ref)
+"""
 function write!(ds::SpatialDataset, path::String, ::SpatialDataZarr)
     _write_dataset_zarr(ds, path)
     ds.backing.path  = abspath(path)
@@ -709,29 +743,170 @@ end
 
 # ── CosMx flatFiles reader ────────────────────────────────────────────────────
 
+"""
+    CosMx(; morphology_dir=nothing)
+
+Format token for loading a CosMx SMI raw flat-file export.
+
+Pass to `read` to load a CosMx export directory. If `morphology_dir` points to
+a Morphology2D tile directory, morphology images are stitched and included as a
+`SpatialImage`; otherwise only transcripts and cell boundaries are loaded.
+
+```julia
+ds = read(CosMx(), "/path/to/cosmx_export/")
+ds = read(CosMx(morphology_dir="/path/to/Morphology2D"), "/path/to/cosmx_export/")
+```
+
+Each field-of-view (FOV) is registered as a separate `CoordinateSystem`;
+use `coord_systems(ds)` and `transform(ds, fov_cs, "global")` to navigate
+between spaces.
+
+# See also
+[`SpatialDataZarr`](@ref)
+"""
 Base.@kwdef struct CosMx
     morphology_dir :: Union{String, Nothing} = nothing
 end
 
-# Locate morphology_cache.zarr. Accepts the zarr path directly or any ancestor dir;
-# searches up to 5 levels deep for a subdir named "morphology_cache.zarr".
-function _find_morphology_zarr(path::String) :: Union{String, Nothing}
-    isdir(path) || return nothing
-    # Direct: path is the zarr group itself
-    isfile(joinpath(path, "zarr.json")) && isdir(joinpath(path, "0")) && return path
-    # BFS up to depth 5 looking for morphology_cache.zarr by name
+# Find the Morphology2D directory up to 4 levels below base_dir.
+function _find_morphology2d(base_dir::String) :: Union{String, Nothing}
+    isdir(base_dir) || return nothing
     function _search(d::String, depth::Int) :: Union{String, Nothing}
         depth == 0 && return nothing
         for entry in readdir(d; join=true)
             isdir(entry) || continue
             startswith(basename(entry), ".") && continue
-            basename(entry) == "morphology_cache.zarr" && return entry
+            basename(entry) == "Morphology2D" && return entry
             found = _search(entry, depth - 1)
             found !== nothing && return found
         end
         nothing
     end
-    _search(path, 5)
+    _search(base_dir, 4)
+end
+
+# BFS down from base_dir (same root as _find_morphology2d) for the channel dict.
+# Returns BiologicalTarget names in file order, or nothing if not found.
+function _cosmx_channel_names(base_dir::String) :: Union{Vector{String}, Nothing}
+    function _search(d::String, depth::Int) :: Union{Vector{String}, Nothing}
+        depth == 0 && return nothing
+        for entry in readdir(d; join=true)
+            startswith(basename(entry), ".") && continue
+            if isfile(entry) && basename(entry) == "Morphology_ChannelID_Dictionary.txt"
+                lines = filter(!isempty, readlines(entry))
+                length(lines) < 2 && return nothing
+                return [split(l, '\t')[2] for l in lines[2:end]]
+            end
+            isdir(entry) && (r = _search(entry, depth - 1)) !== nothing && return r
+        end
+        nothing
+    end
+    isdir(base_dir) ? _search(base_dir, 6) : nothing
+end
+
+# Parse FOV ID from CosMx Morphology2D TIFF filenames: "*_F00001.TIF"
+function _morphology_fov_tiffs(morph2d_dir::String) :: Dict{Int, String}
+    tiff_map = Dict{Int, String}()
+    for f in readdir(morph2d_dir)
+        startswith(f, ".") && continue
+        m = match(r"_F(\d+)\.(TIF|TIFF)$"i, f)
+        m !== nothing && (tiff_map[parse(Int, m[1])] = joinpath(morph2d_dir, f))
+    end
+    tiff_map
+end
+
+# Function barrier: raw TIFF goes out of scope on return, making it GC-eligible
+# before the next FOV is loaded. Avoids accumulating 40×168 MB in memory.
+function _write_fov_morph!(z, tif_path, fov_x_val, fov_y_val, xmin, ymin, fov_w, fov_h, n_ch)
+    raw = load(tif_path)
+    cx = (round(Int, fov_x_val) - xmin + 1):(round(Int, fov_x_val) - xmin + fov_w)
+    cy_bot = round(Int, fov_y_val) - fov_h + 1 - ymin + 1
+    cy = cy_bot:(cy_bot + fov_h - 1)
+    for ch in 1:n_ch
+        page = ndims(raw) == 3 ? raw[:, :, ch] : raw
+        z[cx, cy, ch] = Float32.(page[end:-1:1, :])'
+    end
+    nothing
+end
+
+# Stitch per-FOV Morphology2D TIFFs into a zarr at cache_path.
+# Julia array layout: (canvas_w, canvas_h, n_ch) = (x, y, c).
+function _stitch_morphology_to_zarr(morph2d_dir::String,
+                                     fov_x::Dict{Int,Float64},
+                                     fov_y::Dict{Int,Float64},
+                                     cache_path::String;
+                                     channel_names::Union{Vector{String}, Nothing}=nothing)
+    tiff_map = _morphology_fov_tiffs(morph2d_dir)
+    isempty(tiff_map) && error("No TIFF files found in $morph2d_dir")
+
+    fov_ids = sort(collect(intersect(keys(tiff_map), keys(fov_x))))
+    isempty(fov_ids) && error("No FOVs with both TIFF and position data")
+
+    @info "Stitching $(length(fov_ids)) FOV TIFFs → $cache_path"
+
+    # Load first TIFF to determine dimensions and channel count
+    first_raw = load(tiff_map[fov_ids[1]])
+    fov_h, fov_w = size(first_raw, 1), size(first_raw, 2)
+    n_ch = ndims(first_raw) == 3 ? size(first_raw, 3) : 1
+
+    # Canvas bounds in global_px (integer pixel coords)
+    xmin = round(Int, minimum(fov_x[f] for f in fov_ids))
+    xmax = round(Int, maximum(fov_x[f] for f in fov_ids)) + fov_w - 1
+    # fov_y[f] = top edge of FOV (max global y); bottom = fov_y[f] - fov_h + 1
+    ymin = round(Int, minimum(fov_y[f] for f in fov_ids)) - fov_h + 1
+    ymax = round(Int, maximum(fov_y[f] for f in fov_ids))
+    canvas_w = xmax - xmin + 1
+    canvas_h = ymax - ymin + 1
+
+    # Create zarr store and group metadata
+    mkpath(cache_path)
+    ch_names = if channel_names !== nothing && length(channel_names) == n_ch
+        channel_names
+    else
+        channel_names !== nothing &&
+            @warn "Channel name count ($(length(channel_names))) ≠ TIFF channels ($n_ch); using defaults"
+        ["channel_$i" for i in 1:n_ch]
+    end
+    _write_group_meta(cache_path, Dict(
+        "channel_names" => ch_names,
+        "x_range"       => [Float64(xmin), Float64(xmax)],
+        "y_range"       => [Float64(ymin), Float64(ymax)]))
+
+    # Julia array (canvas_w, canvas_h, n_ch) = (x, y, c); one channel per chunk
+    # so each z[cx, cy, ch] write touches exactly one chunk with no read-modify-write.
+    chunk_y = min(fov_h, canvas_h)
+    chunk_x = min(fov_w, canvas_w)
+    z0_path = joinpath(cache_path, "0")
+    rm(z0_path; recursive=true, force=true)
+    mkpath(z0_path)
+    # Zarr.jl v3 reverses shape/chunks on read: zarr.json [A,B,C] → Julia size (C,B,A).
+    # We want Julia (x,y,c) = (canvas_w,canvas_h,n_ch), so zarr.json = [n_ch,canvas_h,canvas_w].
+    # Chunk reversal: Julia chunks (chunk_x,chunk_y,1) → zarr.json [1,chunk_y,chunk_x].
+    open(joinpath(z0_path, "zarr.json"), "w") do io
+        JSON.print(io, Dict(
+            "zarr_format"        => 3,
+            "node_type"          => "array",
+            "shape"              => [n_ch, canvas_h, canvas_w],
+            "data_type"          => "float32",
+            "chunk_grid"         => Dict("name" => "regular",
+                                         "configuration" => Dict("chunk_shape" => [1, chunk_y, chunk_x])),
+            "chunk_key_encoding" => Dict("name" => "default",
+                                         "configuration" => Dict("separator" => "/")),
+            "fill_value"         => 0.0,
+            "codecs"             => [Dict("name" => "bytes",
+                                          "configuration" => Dict("endian" => "little"))],
+            "attributes"         => Dict{String,Any}()))
+    end
+    z = zopen(z0_path, "w"; zarr_format=3)
+
+    first_raw = nothing  # release before loop
+
+    for f in fov_ids
+        _write_fov_morph!(z, tiff_map[f], fov_x[f], fov_y[f], xmin, ymin, fov_w, fov_h, n_ch)
+        GC.gc(false)  # free the loaded TIFF before the next iteration
+    end
+    @info "Morphology stitched to $cache_path"
+    nothing
 end
 
 function _read_cosmx_morphology(zarr_path::String) :: SpatialImage{Float32}
@@ -741,7 +916,6 @@ function _read_cosmx_morphology(zarr_path::String) :: SpatialImage{Float32}
     x_range  = Float64.(attrs["x_range"])
     y_range  = Float64.(attrs["y_range"])
 
-    # zarr written C-order (c, y, x); Zarr.jl reverses → (x, y, c)
     ax   = (:x, :y, :c)
     p2cs = translation(x_range[1], y_range[1], "pixel", "global_px")
 
@@ -784,7 +958,8 @@ function _gz_csv(path::String)
     CSV.File(path)   # CSV.jl detects .gz extension and decompresses automatically
 end
 
-function Base.read(fmt::CosMx, path::String) :: SpatialDataset
+function Base.read(fmt::CosMx, path::String;
+                   cache::Union{String, Nothing}=nothing) :: SpatialDataset
     run_dir = _cosmx_run_dir(path)
 
     # ── FOV positions ─────────────────────────────────────────────────────────
@@ -875,7 +1050,7 @@ function Base.read(fmt::CosMx, path::String) :: SpatialDataset
         coord_system     = "global_px")
 
     # ── Assemble dataset ──────────────────────────────────────────────────────
-    ds = SpatialDataset()
+    ds = cache !== nothing ? SpatialDataset(; path=abspath(cache)) : SpatialDataset()
     push!(ds, CoordinateSystem("global_px"; axes=(:x, :y), units=("px", "px")))
 
     for f in fov_ids
@@ -909,11 +1084,14 @@ function Base.read(fmt::CosMx, path::String) :: SpatialDataset
         CellComp = ann_comp)
 
     if fmt.morphology_dir !== nothing
-        zarr_path = _find_morphology_zarr(fmt.morphology_dir)
-        if zarr_path === nothing
-            @warn "No morphology_cache.zarr found under $(fmt.morphology_dir); skipping morphology"
+        morph2d = _find_morphology2d(fmt.morphology_dir)
+        if morph2d === nothing
+            @warn "No Morphology2D directory found under $(fmt.morphology_dir); skipping morphology"
         else
-            ds["morphology"] = _read_cosmx_morphology(zarr_path)
+            morph_zarr = joinpath(ds.backing.path, "images", "morphology")
+            isdir(morph_zarr) || _stitch_morphology_to_zarr(morph2d, fov_x, fov_y, morph_zarr;
+                channel_names=_cosmx_channel_names(fmt.morphology_dir))
+            ds["morphology"] = _read_cosmx_morphology(morph_zarr)
         end
     end
 

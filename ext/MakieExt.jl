@@ -80,6 +80,61 @@ end
 Makie.convert_arguments(P::Type{<:Image}, img::SpatialImage) =
     convert_arguments(P, colorview(Gray, img))
 
+# ── SpatialImage/SpatialImageColorView → Image (zoom-responsive) ─────────────
+# For images with pyramid levels, image!(ax, ...) pushes a new Observable value
+# when the axis zoom changes, selecting the pyramid level whose full-res/screen-px
+# ratio best matches the current viewport. Standard Makie reactive pattern.
+
+function _materialise_level(v::SpatialImageColorView{C}, lvl) where C
+    xi = something(findfirst(==(:x), v.axes), 1)
+    yi = something(findfirst(==(:y), v.axes), 2)
+    dense = Array(lvl)
+    eltype(dense) <: Colorant && return yi < xi ? permutedims(dense, (2, 1)) : dense
+    disp = v.transform !== nothing ? v.transform.(dense) : _to_colorable(dense)
+    cv   = colorview(C, disp)
+    yi < xi ? permutedims(collect(cv), (2, 1)) : collect(cv)
+end
+
+function Makie.image!(ax::Makie.Axis, img::SpatialImage; kw...)
+    Makie.image!(ax, colorview(Gray, img); kw...)
+end
+
+function Makie.image!(ax::Makie.Axis, v::SpatialImageColorView; kw...)
+    x_range, y_range = _pixel_extent(v)
+    xi = something(findfirst(==(:x), v.axes), 1)
+    yi = something(findfirst(==(:y), v.axes), 2)
+
+    if isempty(v.pyramid)
+        d   = _select_level(v)
+        out = ndims(d) == 2 && yi < xi ? permutedims(d, (2, 1)) : d
+        return Makie.image!(ax, x_range, y_range, out; kw...)
+    end
+
+    pyr_scales = [round(Int, size(v.data, yi) / size(l, yi)) for l in v.pyramid]
+
+    cur_lev = Ref(lastindex(v.pyramid))
+    img_obs = Observable(_materialise_level(v, v.pyramid[end]))
+    plt     = Makie.image!(ax, x_range, y_range, img_obs; kw...)
+
+    on(ax.finallimits; update=true) do lims
+        ax.scene.viewport[].widths[1] == 0 && return
+        vis_w  = max(lims.widths[1], 1.0)
+        scn_w  = max(ax.scene.viewport[].widths[1], 1)
+        target = max(1, floor(Int, vis_w / scn_w))
+
+        best = 1
+        for i in lastindex(pyr_scales):-1:1
+            pyr_scales[i] <= target && (best = i; break)
+        end
+
+        best == cur_lev[] && return
+        cur_lev[] = best
+        img_obs[] = _materialise_level(v, v.pyramid[best])
+    end
+
+    plt
+end
+
 # ── SpatialLabels → Heatmap ───────────────────────────────────────────────────
 
 Makie.convert_arguments(P::Type{<:Heatmap}, lbl::SpatialLabels) =

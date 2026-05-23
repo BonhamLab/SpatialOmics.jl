@@ -1,5 +1,23 @@
 # ── SpatialExtent ─────────────────────────────────────────────────────────────
 
+"""
+    SpatialExtent(xmin, xmax, ymin, ymax; coord_system="")
+    SpatialExtent(shp::SpatialShapes)
+
+Axis-aligned bounding box in a named coordinate system.
+
+The `coord_system` field is checked when combining two extents (`union`,
+`intersect`) or filtering elements with `view` — a mismatch raises an error
+rather than silently producing wrong results.
+
+```julia
+ext = SpatialExtent(1000.0, 2000.0, 500.0, 1500.0; coord_system="global")
+roi = view(ds, ext)
+```
+
+# See also
+[`SpatialROI`](@ref), [`SpatialDatasetView`](@ref), [`SpatialElementView`](@ref)
+"""
 struct SpatialExtent
     xmin :: Float64
     xmax :: Float64
@@ -47,6 +65,18 @@ end
 
 # ── SpatialROI ────────────────────────────────────────────────────────────────
 
+"""
+    SpatialROI(geometry; coord_system="")
+
+Polygon region of interest backed by any GeoInterface-compatible geometry.
+
+Wraps the geometry with a cached axis-aligned bounding box for fast pre-filtering.
+Point containment uses `GeometryOps.contains`; `pt ∈ roi` and
+`filter(pt -> pt ∈ roi, pts)` are the idiomatic containment APIs.
+
+# See also
+[`SpatialExtent`](@ref), [`geometry`](@ref), [`SpatialElementView`](@ref)
+"""
 struct SpatialROI{G}
     geometry     :: G
     extent       :: SpatialExtent    # cached bbox of the geometry
@@ -57,6 +87,11 @@ function SpatialROI(geom; coord_system::String="")
     SpatialROI(geom, _extent_of(geom, coord_system), coord_system)
 end
 
+"""
+    geometry(roi) → geometry
+
+Return the underlying GeoInterface geometry from a `SpatialROI`.
+"""
 geometry(roi::SpatialROI)      = roi.geometry
 coord_system(roi::SpatialROI)  = roi.coord_system
 
@@ -87,11 +122,36 @@ function SpatialShapes(roi::SpatialROI; instance_id::Int32=Int32(1))
     SpatialShapes([Polygon(ring)]; instance_id=[instance_id], coord_system=roi.coord_system)
 end
 
-# Stub — method defined in MakieExt when Makie is loaded
+"""
+    select(ax, ds) → SpatialROI
+
+Interactively draw a polygon ROI on Makie axis `ax` and return the result as a
+`SpatialROI`. Requires a Makie backend to be loaded.
+
+This function is a stub; the implementation is provided by the Makie extension
+when a backend is loaded.
+"""
 function select end
 
 # ── SpatialElementView ────────────────────────────────────────────────────────
 
+"""
+    SpatialElementView{T, R}
+
+Lazy spatial view into a single element, analogous to Julia's `SubArray`.
+
+Holds a reference to the parent element and a region (`SpatialExtent` or
+`SpatialROI`). The spatial filter is applied only when accessors (`coords`,
+`geometries`, `feature_ids`, etc.) or `collect` are called — no data is copied
+on construction.
+
+`overlap` controls how shapes are matched:
+- `:any` (default) — include shapes whose bounding box intersects the ROI
+- `:full` — include only shapes fully contained within the ROI
+
+# See also
+[`SpatialDatasetView`](@ref), [`SpatialExtent`](@ref), [`SpatialROI`](@ref)
+"""
 struct SpatialElementView{T, R}
     parent  :: T
     roi     :: R
@@ -100,6 +160,24 @@ end
 
 # ── SpatialDatasetView ────────────────────────────────────────────────────────
 
+"""
+    SpatialDatasetView
+
+Lazy view across all elements of a `SpatialDataset`, scoped to a spatial region.
+
+Produced by `view(ds, extent)` or `view(ds, roi)`. Accessing an element via
+the typed accessors (`points`, `shapes`, `images`, `labels`) returns a
+`SpatialElementView` for that element — still lazy, no data copied.
+
+```julia
+roi = view(ds, SpatialExtent(1000.0, 2000.0, 500.0, 1500.0))
+tx  = points(roi, "transcripts")   # SpatialElementView{SpatialPoints}
+collect(tx)                        # materialise into a concrete SpatialPoints
+```
+
+# See also
+[`SpatialElementView`](@ref), [`SpatialExtent`](@ref)
+"""
 struct SpatialDatasetView
     parent :: SpatialDataset
     roi    :: Union{SpatialExtent, SpatialROI}
@@ -219,6 +297,14 @@ geometries(v::SpatialElementView{<:SpatialShapes}) =
 
 coords(v::SpatialElementView{<:SpatialPoints}) =
     v.parent.coords[_mask(v.parent, v.roi, v.overlap)]
+
+function coords(v::SpatialElementView{<:SpatialPoints}, feature::String)
+    p   = v.parent
+    idx = findfirst(==(feature), p.feature_codebook)
+    idx === nothing && return Point{2, eltype(eltype(p.coords))}[]
+    mask = _mask(p, v.roi, v.overlap)
+    p.coords[mask .& (p.feature_id .== idx)]
+end
 
 feature_ids(v::SpatialElementView{<:SpatialPoints}) =
     v.parent.feature_id[_mask(v.parent, v.roi, v.overlap)]
