@@ -1,13 +1,13 @@
 # Visualization
 
-`SpatialViz.jl` extends standard Makie verbs to dispatch directly on
-SpatialOmicsBase element types. Users write the same Makie code they already
-know; the type system routes to spatial-aware implementations.
+`SpatialOmics` extends standard Makie verbs to dispatch directly on spatial
+element types. Users write the same Makie code they already know; the type
+system routes to spatial-aware implementations.
 
 ## Backend choice
 
-`SpatialViz` depends only on the abstract `Makie` package. Load a concrete
-backend **before** `using SpatialViz`:
+`SpatialOmics` depends only on the abstract `Makie` package. Load a concrete
+backend **before** calling any plot verb:
 
 ```julia
 using GLMakie      # recommended for interactive exploration
@@ -15,18 +15,16 @@ using GLMakie      # recommended for interactive exploration
 using CairoMakie   # recommended for notebooks / publication figures
 # or
 using WGLMakie     # for Pluto / Jupyter
-
-using SpatialViz
 ```
 
 ## Plotting verbs
 
 | Call | What it does |
 |------|-------------|
-| `heatmap(img; channel=1)` | Pyramid-aware image; `Makie.Resampler` selects the correct level on each zoom |
-| `scatter(pts)` | Transcript / centroid scatter from first two coordinate columns |
-| `poly(shp)` | Cell boundary / annotation polygons from `SpatialShapes` |
-| `heatmap(lbl)` | Integer label overlay from `SpatialLabels` |
+| `heatmap!(ax, img; channel=1)` | Pyramid-aware image; `Makie.Resampler` selects the correct level on each zoom |
+| `scatter!(ax, pts)` | Transcript / centroid scatter from `coords(pts)` |
+| `poly!(ax, shp)` | Cell boundary / annotation polygons from `SpatialShapes` |
+| `heatmap!(ax, lbl)` | Integer label overlay from `SpatialLabels` |
 
 All verbs have mutating `!` variants and accept the full set of Makie keyword
 arguments (`colormap`, `color`, `strokewidth`, `markersize`, etc.).
@@ -34,70 +32,83 @@ arguments (`colormap`, `color`, `strokewidth`, `markersize`, etc.).
 ## Pyramid-aware images
 
 `SpatialImage` objects loaded from OME-Zarr carry pre-computed pyramid levels
-as lazy `DiskArray`-backed arrays. `heatmap(img)` wraps them in
-`ImagePyramidSampler` and passes the sampler to `Makie.Resampler`, which
-selects the correct resolution level on every zoom or pan event. No pixels
-are loaded until a viewport is established.
+as lazy `DiskArray`-backed arrays. `heatmap!(ax, img)` wraps them in an
+`ImagePyramidSampler` and passes it to `Makie.Resampler`, which selects the
+correct resolution level on every zoom or pan event. No pixels are loaded until
+a viewport is established.
 
 ```julia
-img = xen.images["morphology_focus"]
+img = images(ds, "morphology_focus")
 
-# Channel 1 (default)
-fig, ax, plt = heatmap(img; colormap=:grays,
-    axis=(; aspect=DataAspect()), figure=(; size=(700, 230)))
-
-# Select a different channel
-heatmap!(ax, img; channel=2, colormap=:viridis)
+fig, ax, _ = heatmap(img; channel=1, colormap=:grays,
+    axis=(; aspect=DataAspect(), yreversed=true),
+    figure=(; size=(700, 230)))
+tightlimits!(ax)
 ```
+
+## Channel selection
+
+For multi-channel images, pass `channel=i` (integer index) or
+`channel="DAPI"` (channel name) to the plot verb. Alternatively, use the
+`channel` function to extract a 2-D single-channel `SpatialImage` first:
+
+```julia
+dapi = channel(img, 1)           # or channel(img, "DAPI")
+heatmap!(ax, scaleminmax(dapi); colormap=:grays)
+```
+
+`scaleminmax` samples the intensity range from the coarsest pyramid level and
+attaches a min-max display transform that is applied at render time.
 
 ## Lazy spatial views
 
-`view(ds, extent)` returns a `SpatialDatasetView` — a lazy pointer scoped to
-a bounding box. Accessing `.images["key"]`, `.points["key"]`, etc. returns a
-`SpatialElementView{T}` that carries the parent element and the extent. The
-spatial filter is applied only when a plot verb materialises the data.
-
-This is the preferred way to build composite panels: define the ROI once, then
-pass it to each layer independently.
+`view(ds, ext)` returns a `SpatialDatasetView` scoped to a bounding box. This
+is the preferred way to build composite panels: define the ROI once, then pass
+the view to each layer independently.
 
 ```julia
-roi = view(xen, SpatialExtent(cx-500, cx+500, cy-500, cy+500))
+ext = SpatialExtent(cx - 500.0, cx + 500.0, cy - 500.0, cy + 500.0; coord_system="global")
+roi = view(ds, ext)
 
 fig = Figure(size=(600, 600))
 ax  = Axis(fig[1, 1]; aspect=DataAspect(), yreversed=true,
            xlabel="x (µm)", ylabel="y (µm)")
 
-# Each call applies the crop independently; no intermediate copies
-heatmap!(ax, roi.images["morphology_focus"]; channel=1, colormap=:grays)
-poly!(ax,    roi.shapes["cell_boundaries"];  color=:transparent,
-                                             strokecolor=:cyan, strokewidth=0.4)
-scatter!(ax, roi.points["transcripts"];      color=(:red, 0.25), markersize=1)
+# Each call applies the crop independently — no intermediate copies
+heatmap!(ax, images(roi, "morphology_focus"); channel=1, colormap=:grays)
+poly!(ax,    shapes(roi, "cell_boundaries");  color=:transparent,
+                                              strokecolor=:cyan, strokewidth=0.4)
+scatter!(ax, points(roi, "transcripts");      color=(:red, 0.25), markersize=1)
+tightlimits!(ax)
 fig
 ```
 
-When a `SpatialElementView{SpatialImage}` is passed to `heatmap!`, the axis
-limits are automatically constrained to the view extent — no explicit `limits!`
-call is needed.
-
-You can also create element-level views directly:
-
-```julia
-pts_view = view(xen.points["transcripts"], extent)
-scatter(pts_view; markersize=1)
-```
+When a `SpatialImage` is accessed through a `SpatialDatasetView`, the axis
+limits are automatically constrained to the view extent.
 
 ## Multi-channel display
 
 ```julia
-channel_labels = ["DAPI", "ATP1A1/CD45/E-Cadherin", "18S", "AlphaSMA/Vimentin"]
-colormaps      = [:grays, :viridis, :magma, :plasma]
+ch_names = ["DAPI", "ATP1A1/CD45/E-Cad", "18S", "AlphaSMA/Vim"]
+cmaps    = [:grays, :viridis, :magma, :plasma]
 
 fig = Figure(size=(900, 250))
-for (i, (lbl, cmap)) in enumerate(zip(channel_labels, colormaps))
+for (i, (lbl, cmap)) in enumerate(zip(ch_names, cmaps))
     ax = Axis(fig[1, i]; title=lbl, aspect=DataAspect(),
               yreversed=true, xticksvisible=false, yticksvisible=false)
-    heatmap!(ax, img; channel=i, colormap=cmap)
+    heatmap!(ax, images(ds, "morphology_focus"); channel=i, colormap=cmap)
     tightlimits!(ax)
 end
 fig
+```
+
+## RGB composite
+
+Use `colorview` to combine single-channel images into a colour composite:
+
+```julia
+r = scaleminmax(channel(img, 1))
+g = scaleminmax(channel(img, 2))
+b = scaleminmax(channel(img, 3))
+heatmap!(ax, colorview(RGB, r, g, b))
 ```

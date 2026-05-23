@@ -1,29 +1,39 @@
-# Spatial views and extents
+# Views and extents
 
-## Bounding boxes
+See [Lazy views and spatial filtering](@ref) for a conceptual overview.
+
+## Extents and regions
 
 ```@docs
 SpatialExtent
-intersects
-extent
+SpatialROI
 ```
 
-## Lazy views
-
-`view(ds, ext)` and `view(el, ext)` return lazy views analogous to Julia's
-`SubArray` from `@view x[...]`. No data is copied; the spatial filter is
-applied only when a plot verb or `crop` materialises the underlying array.
+## Views
 
 ```@docs
 SpatialDatasetView
 SpatialElementView
 ```
 
-## Materialisation
-
-`crop` returns a concrete filtered copy. Use it when you need a standalone
-element outside of a plotting context.
+## Accessors
 
 ```@docs
-crop
+geometry
+select
+```
+
+## Example: constructing and intersecting extents
+
+```@example views
+using SpatialOmics
+
+a = SpatialExtent(0.0, 1000.0, 0.0, 500.0; coord_system="global")
+b = SpatialExtent(500.0, 1500.0, 0.0, 500.0; coord_system="global")
+
+intersect(a, b)   # SpatialExtent(500.0, 1000.0, 0.0, 500.0, "global")
+```
+
+```@example views
+union(a, b)       # SpatialExtent(0.0, 1500.0, 0.0, 500.0, "global")
 ```

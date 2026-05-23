@@ -2,77 +2,94 @@
 
 ## Loading data
 
+SpatialOmics uses format tokens to select the reader. Pass the token as the
+first argument to `read`:
+
 ```julia
 using SpatialOmics
 import SpatialOmics as SO
 
-# SpatialData OME-ZARR (Xenium, CosMx, Visium, MERFISH)
-ds = SO.read(SO.Zarr(), "/path/to/experiment.zarr")
+# SpatialData OME-Zarr (Xenium, CosMx, Visium, MERFISH — any SpatialData-compatible store)
+ds = read(SpatialDataZarr(), "/path/to/experiment.zarr")
 
-# Platform-specific loaders (un-exported; use SO.* prefix)
-xen = SO.load_xenium("/path/to/xenium_output/")
-cos = SO.load(SO.CosMxReader(), "/path/to/cosmx_export/")
+# CosMx SMI raw flat-file export
+ds = read(CosMx(), "/path/to/cosmx_export/")
 
-# Round-trip back to SpatialData OME-ZARR
-SO.write(ds, "/path/to/output.zarr", SO.Zarr())
+# CosMx with morphology images (stitched from per-FOV TIF tiles)
+ds = read(CosMx(morphology_dir="/path/to/Morphology2D"), "/path/to/cosmx_export/")
 ```
 
 ## Inspecting a dataset
 
+Use typed accessor functions. They retrieve a named element and verify its type:
+
 ```julia
-# Element dictionaries
-keys(ds.images)   # e.g. ["morphology_focus"]
-keys(ds.points)   # e.g. ["transcripts"]
-keys(ds.shapes)   # e.g. ["cell_boundaries"]
-keys(ds.tables)   # e.g. ["cell_by_gene"]
+# List all element names
+keys(elements(ds))
 
-# Element access
-img = ds.images["morphology_focus"]
-pts = ds.points["transcripts"]
+# Retrieve typed elements
+img = images(ds, "morphology_focus")   # SpatialImage
+tx  = points(ds, "transcripts")        # SpatialPoints
+bnd = shapes(ds, "cell_boundaries")    # SpatialShapes
 
-# Bounding box of any element
-ext = extent(pts)   # SpatialExtent{Float32}
+# Coordinate systems registered in this dataset
+coord_systems(ds)
+
+# Gene/feature summary
+top_features(tx, 10)          # 10 most frequent genes
+count_per_instance(tx)        # transcript count per cell
 ```
 
 ## Defining a region of interest
 
 `SpatialExtent` is a typed bounding box. `view(ds, ext)` returns a
-`SpatialDatasetView` — a lazy pointer into the dataset that applies the
-spatial filter only when data are actually needed:
+`SpatialDatasetView` — a lazy pointer that applies the spatial filter only when
+data are accessed:
 
 ```julia
-# Centre on the transcript cloud
-cx = (ext.xmin + ext.xmax) / 2
-cy = (ext.ymin + ext.ymax) / 2
-roi = view(ds, SpatialExtent(cx-500, cx+500, cy-500, cy+500))
+ext = SpatialExtent(4000.0, 5000.0, 1000.0, 2000.0; coord_system="global")
+roi = view(ds, ext)
 
-# Element access returns SpatialElementView — still no data copied
-pts_view = roi.points["transcripts"]
+# Accessing elements through the view returns lazy filtered views
+tx_roi  = points(roi, "transcripts")     # SpatialElementView{SpatialPoints}
+bnd_roi = shapes(roi, "cell_boundaries") # SpatialElementView{SpatialShapes}
+
+# Materialise when you need a concrete copy for computation
+tx_mat = collect(tx_roi)   # SpatialPoints with only the filtered rows
 ```
 
 ## Visualization
 
-Load a Makie backend **before** `SpatialViz`. The package is backend-agnostic.
+Load a Makie backend **before** `using SpatialOmics` (or before the first plot):
 
 ```julia
-using GLMakie     # interactive; or CairoMakie (static), WGLMakie (browser)
-using SpatialViz
+using GLMakie      # interactive; or CairoMakie (static), WGLMakie (browser)
 ```
 
 Standard Makie verbs are extended to accept spatial types directly:
 
 ```julia
-# Full slide — Makie.Resampler selects the correct pyramid level on each zoom
-heatmap(ds.images["morphology_focus"]; channel=1, colormap=:grays)
-
-# With a region view — axis is constrained to the ROI automatically
+# Build a composite ROI panel
 fig = Figure(size=(600, 600))
-ax  = Axis(fig[1, 1]; aspect=DataAspect(), yreversed=true)
-heatmap!(ax, roi.images["morphology_focus"]; channel=1, colormap=:grays)
-poly!(ax,    roi.shapes["cell_boundaries"];  color=:transparent, strokecolor=:cyan)
-scatter!(ax, roi.points["transcripts"];      markersize=1, color=(:red, 0.3))
+ax  = Axis(fig[1, 1]; aspect=DataAspect(), yreversed=true,
+           xlabel="x (µm)", ylabel="y (µm)")
+
+heatmap!(ax, images(roi, "morphology_focus"); channel=1, colormap=:grays)
+poly!(ax,    shapes(roi, "cell_boundaries"); color=:transparent, strokecolor=:cyan, strokewidth=0.4)
+scatter!(ax, points(roi, "transcripts");     color=(:red, 0.25), markersize=1)
+tightlimits!(ax)
 fig
 ```
 
-See the [Visualization guide](@ref) for details on pyramid levels, channel
-selection, and multi-panel layouts.
+See the [Visualization guide](visualization.md) for pyramid-aware images,
+multi-channel display, and channel selection.
+
+## Saving
+
+```julia
+write!(ds, "/path/to/output.zarr", SpatialDataZarr())
+```
+
+`write!` writes to disk and updates the dataset's backing store to the new
+location — use this for persistent saves. The resulting Zarr directory is
+compatible with Python's SpatialData library.

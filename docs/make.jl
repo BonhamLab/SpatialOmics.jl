@@ -1,31 +1,35 @@
 using Documenter
 using SpatialOmics
-import SpatialOmicsBase
-import SpatialIO
-import SpatialViz
 
 makedocs(
     sitename = "SpatialOmics.jl",
-    authors  = "stx_dev contributors",
-    modules  = [SpatialOmics, SpatialOmicsBase, SpatialIO, SpatialViz],
+    authors  = "Kevin Bonham",
+    modules  = [SpatialOmics],
     remotes  = nothing,
     format   = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
         canonical  = "https://Bonhamlab.github.io/SpatialOmics.jl",
     ),
     pages = [
-        "Home"      => "index.md",
-        "Guides"    => [
+        "Home" => "index.md",
+        "Explanation" => [
+            "explanation/data_model.md",
+            "explanation/coordinate_systems.md",
+            "explanation/lazy_views.md",
+        ],
+        "Reference" => [
+            "reference/dataset.md",
+            "reference/elements.md",
+            "reference/coordinate_systems.md",
+            "reference/views.md",
+            "reference/relations_analysis.md",
+            "reference/io.md",
+            "reference/visualization.md",
+        ],
+        "Guides" => [
             "guides/quickstart.md",
             "guides/visualization.md",
             "guides/cosmx.md",
-        ],
-        "Reference" => [
-            "reference/data_structures.md",
-            "reference/views.md",
-            "reference/platform_readers.md",
-            "reference/spatialdata_io.md",
-            "reference/format_utils.md",
         ],
     ],
     checkdocs = :exports,
@@ -34,8 +38,8 @@ makedocs(
 
 if get(ENV, "CI", nothing) == "true"
     deploydocs(
-        repo   = "github.com/Bonhamlab/SpatialOmics.jl.git",
-        target = "build",
+        repo         = "github.com/Bonhamlab/SpatialOmics.jl.git",
+        target       = "build",
         push_preview = true,
     )
 end

@@ -1,6 +1,3 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
-SpatialIO = "d639b19a-202c-43f8-bdd7-6eb317ea560a"
-SpatialOmics = "7c9a2e4e-7629-4232-91bd-868b4649c1ff"
-SpatialOmicsBase = "fc95849c-1493-4666-a0c4-8e4886e585c0"
-SpatialViz = "a3fa9d22-10bf-458f-910d-4714367cf225"
+SpatialOmics = "7c9a2e4e-8f1d-4a6b-b84c-3e8a9f2d1c5e"
