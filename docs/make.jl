@@ -8,7 +8,7 @@ makedocs(
     remotes  = nothing,
     format   = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
-        canonical  = "https://Bonhamlab.github.io/SpatialOmics.jl",
+        canonical  = "https://BonhamLab.github.io/SpatialOmics.jl",
     ),
     pages = [
         "Home" => "index.md",
@@ -38,7 +38,7 @@ makedocs(
 
 if get(ENV, "CI", nothing) == "true"
     deploydocs(
-        repo         = "github.com/Bonhamlab/SpatialOmics.jl.git",
+        repo         = "github.com/BonhamLab/SpatialOmics.jl.git",
         target       = "build",
         push_preview = true,
     )
