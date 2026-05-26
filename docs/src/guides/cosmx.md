@@ -80,7 +80,7 @@ fig = Figure(size=(600, 600))
 ax  = Axis(fig[1, 1]; aspect=DataAspect(), yreversed=true)
 
 # Tissue image — rescaled for display
-heatmap!(ax, scaleminmax(channel(images(roi, "morphology"), 1)); colormap=:grays)
+image!(ax, scaleminmax(channel(images(roi, "morphology"), 1)))
 # Cell boundaries
 poly!(ax, shapes(roi, "cell_boundaries"); color=:transparent, strokecolor=:cyan, strokewidth=0.3)
 # Top gene transcripts

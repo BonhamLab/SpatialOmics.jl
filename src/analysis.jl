@@ -115,12 +115,6 @@ function analyze(::Membership{strict}, src::SpatialShapes, dst::SpatialShapes) w
                     src_ids, dst_ids, nothing)
 end
 
-# ── KNN stub — actual implementation lives in ext/NearestNeighborsExt.jl ──────
-
-function analyze(::KNN, ::SpatialRelation{Expression})
-    error("KNN requires a backend. Load one:\n  using NearestNeighbors")
-end
-
 # ── distances ─────────────────────────────────────────────────────────────────
 
 """

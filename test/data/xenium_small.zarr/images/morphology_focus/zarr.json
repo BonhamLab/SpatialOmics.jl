@@ -1,0 +1,1 @@
+{"attributes":{"_spatialdata_attrs":{"axes":["x","y","c"],"channel_names":["DAPI","ATP1A1/CD45/E-Cadherin","18S","AlphaSMA/Vimentin"],"coord_system":"global","pixel_to_cs":{"dst":"global","matrix":[[1.0,0.0,30000.0],[0.0,1.0,7500.0],[0.0,0.0,1.0]],"src":"pixel","type":"affine"},"type":"image"}},"node_type":"group","zarr_format":3}

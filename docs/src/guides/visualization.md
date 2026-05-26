@@ -21,44 +21,42 @@ using WGLMakie     # for Pluto / Jupyter
 
 | Call | What it does |
 |------|-------------|
-| `heatmap!(ax, img; channel=1)` | Pyramid-aware image; `Makie.Resampler` selects the correct level on each zoom |
+| `image!(ax, channel(img, 1))` | Pyramid-aware image; selects the correct level on each zoom |
 | `scatter!(ax, pts)` | Transcript / centroid scatter from `coords(pts)` |
 | `poly!(ax, shp)` | Cell boundary / annotation polygons from `SpatialShapes` |
 | `heatmap!(ax, lbl)` | Integer label overlay from `SpatialLabels` |
 
 All verbs have mutating `!` variants and accept the full set of Makie keyword
-arguments (`colormap`, `color`, `strokewidth`, `markersize`, etc.).
+arguments (`color`, `strokewidth`, `markersize`, etc.).
 
 ## Pyramid-aware images
 
 `SpatialImage` objects loaded from OME-Zarr carry pre-computed pyramid levels
-as lazy `DiskArray`-backed arrays. `heatmap!(ax, img)` wraps them in an
-`ImagePyramidSampler` and passes it to `Makie.Resampler`, which selects the
-correct resolution level on every zoom or pan event. No pixels are loaded until
+as lazy `DiskArray`-backed arrays. `image!(ax, img)` selects the correct
+resolution level on every zoom or pan event. No pixels are loaded until
 a viewport is established.
 
 ```julia
 img = images(ds, "morphology_focus")
 
-fig, ax, _ = heatmap(img; channel=1, colormap=:grays,
+fig, ax, _ = image(channel(img, 1);
     axis=(; aspect=DataAspect(), yreversed=true),
     figure=(; size=(700, 230)))
 tightlimits!(ax)
 ```
 
-## Channel selection
+## Channel selection and display scaling
 
-For multi-channel images, pass `channel=i` (integer index) or
-`channel="DAPI"` (channel name) to the plot verb. Alternatively, use the
-`channel` function to extract a 2-D single-channel `SpatialImage` first:
+For multi-channel images, extract a single channel with `channel`, then apply
+`scaleminmax` for display-time intensity normalisation:
 
 ```julia
 dapi = channel(img, 1)           # or channel(img, "DAPI")
-heatmap!(ax, scaleminmax(dapi); colormap=:grays)
+image!(ax, scaleminmax(dapi))
 ```
 
 `scaleminmax` samples the intensity range from the coarsest pyramid level and
-attaches a min-max display transform that is applied at render time.
+attaches a min-max display transform applied at render time — no copy is made.
 
 ## Lazy spatial views
 
@@ -75,7 +73,7 @@ ax  = Axis(fig[1, 1]; aspect=DataAspect(), yreversed=true,
            xlabel="x (µm)", ylabel="y (µm)")
 
 # Each call applies the crop independently — no intermediate copies
-heatmap!(ax, images(roi, "morphology_focus"); channel=1, colormap=:grays)
+image!(ax,   scaleminmax(channel(images(roi, "morphology_focus"), 1)))
 poly!(ax,    shapes(roi, "cell_boundaries");  color=:transparent,
                                               strokecolor=:cyan, strokewidth=0.4)
 scatter!(ax, points(roi, "transcripts");      color=(:red, 0.25), markersize=1)
@@ -90,13 +88,12 @@ limits are automatically constrained to the view extent.
 
 ```julia
 ch_names = ["DAPI", "ATP1A1/CD45/E-Cad", "18S", "AlphaSMA/Vim"]
-cmaps    = [:grays, :viridis, :magma, :plasma]
 
 fig = Figure(size=(900, 250))
-for (i, (lbl, cmap)) in enumerate(zip(ch_names, cmaps))
+for (i, lbl) in enumerate(ch_names)
     ax = Axis(fig[1, i]; title=lbl, aspect=DataAspect(),
               yreversed=true, xticksvisible=false, yticksvisible=false)
-    heatmap!(ax, images(ds, "morphology_focus"); channel=i, colormap=cmap)
+    image!(ax, scaleminmax(channel(images(ds, "morphology_focus"), i)))
     tightlimits!(ax)
 end
 fig
@@ -110,5 +107,5 @@ Use `colorview` to combine single-channel images into a colour composite:
 r = scaleminmax(channel(img, 1))
 g = scaleminmax(channel(img, 2))
 b = scaleminmax(channel(img, 3))
-heatmap!(ax, colorview(RGB, r, g, b))
+image!(ax, colorview(RGB, r, g, b))
 ```

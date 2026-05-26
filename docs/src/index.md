@@ -33,7 +33,7 @@ roi = view(ds, ext)
 # Build a composite panel using standard Makie verbs
 fig = Figure(size=(600, 600))
 ax  = Axis(fig[1, 1]; aspect=DataAspect(), yreversed=true)
-heatmap!(ax, images(roi, "morphology_focus"); channel=1, colormap=:grays)
+image!(ax,   scaleminmax(channel(images(roi, "morphology_focus"), 1)))
 poly!(ax,    shapes(roi, "cell_boundaries");  color=:transparent, strokecolor=:cyan)
 scatter!(ax, points(roi, "transcripts");      markersize=1, color=(:red, 0.3))
 tightlimits!(ax)

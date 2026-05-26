@@ -15,6 +15,7 @@ import ImageBase: scaleminmax
 using MappedArrays: mappedarray
 using Colors: Colorant, Gray, RGB
 using Random: randperm
+using SparseArrays
 import ImageBase.ImageCore: colorview
 using Images: load
 

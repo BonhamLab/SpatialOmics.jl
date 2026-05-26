@@ -32,6 +32,10 @@ __pycache__/
 *.ipynb_checkpoints/
 /.jupyter_cache/
 
+# ─── Test fixtures ────────────────────────────────────────────────────────────
+# test/data/ contains committed fixture zarrs — do NOT ignore it.
+# The full experiment datasets live outside the repo in test_data/experiments/.
+
 # ─── OS / Editor ──────────────────────────────────────────────────────────────
 .DS_Store
 **/.DS_Store

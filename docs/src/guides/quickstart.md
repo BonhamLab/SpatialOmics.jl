@@ -74,7 +74,7 @@ fig = Figure(size=(600, 600))
 ax  = Axis(fig[1, 1]; aspect=DataAspect(), yreversed=true,
            xlabel="x (µm)", ylabel="y (µm)")
 
-heatmap!(ax, images(roi, "morphology_focus"); channel=1, colormap=:grays)
+image!(ax,   scaleminmax(channel(images(roi, "morphology_focus"), 1)))
 poly!(ax,    shapes(roi, "cell_boundaries"); color=:transparent, strokecolor=:cyan, strokewidth=0.4)
 scatter!(ax, points(roi, "transcripts");     color=(:red, 0.25), markersize=1)
 tightlimits!(ax)

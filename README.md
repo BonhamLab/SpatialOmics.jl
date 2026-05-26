@@ -1,7 +1,8 @@
 # SpatialOmics.jl
 
 [![CI](https://github.com/BonhamLab/SpatialOmics.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/BonhamLab/SpatialOmics.jl/actions/workflows/ci.yml)
-[![Docs (stable)](https://img.shields.io/badge/docs-stable-blue.svg)](https://BonhamLab.github.io/SpatialOmics.jl/stable/)
+<!-- [![Docs (stable)](https://img.shields.io/badge/docs-stable-blue.svg)](https://BonhamLab.github.io/SpatialOmics.jl/stable/) -->
+
 [![Docs (dev)](https://img.shields.io/badge/docs-dev-blue.svg)](https://BonhamLab.github.io/SpatialOmics.jl/dev/)
 [![Project Status: WIP](https://www.repostatus.org/badges/latest/wip.svg)](https://www.repostatus.org/#wip)
 
@@ -24,7 +25,6 @@ using SpatialOmics
 # Load from SpatialData OME-Zarr (Xenium, CosMx, Visium, …)
 ds = read(SpatialDataZarr(), "/path/to/experiment.zarr")
 
-# Define a region of interest — lazy, no data copied
 ext = SpatialExtent(4000.0, 5000.0, 1000.0, 2000.0; coord_system="global")
 roi = view(ds, ext)
 

@@ -479,11 +479,12 @@ end
 # ── OME-NGFF coord system helper ──────────────────────────────────────────────
 
 function _ome_cs_name(attrs::AbstractDict)
+    name = nothing
     for t in get(attrs, "coordinateTransformations", [])
         out = get(t, "output", nothing)
-        out !== nothing && haskey(out, "name") && return String(out["name"])
+        out !== nothing && haskey(out, "name") && (name = String(out["name"]))
     end
-    "global"
+    name !== nothing ? name : "global"
 end
 
 function _ome_xy_scale(attrs::AbstractDict)
@@ -512,6 +513,8 @@ function _read_ome_image_zarr_py(grp::String)
     # Python zarr is C-order; Zarr.jl reverses dims → reverse axis labels too
     ax   = Tuple(reverse([Symbol(a["name"]) for a in ms["axes"]]))
     cs   = _ome_cs_name(ms)
+    sx, sy = _ome_xy_scale(ms)
+    p2cs = (sx ≈ 1.0 && sy ≈ 1.0) ? Identity("pixel", cs) : scaling(sx, sy, "pixel", cs)
 
     ch_names = String[]
     if haskey(get(ome, "omero", Dict()), "channels")
@@ -520,7 +523,7 @@ function _read_ome_image_zarr_py(grp::String)
 
     paths = String[d["path"] for d in ms["datasets"]]
     data  = zopen(joinpath(grp, paths[1]), "r"; zarr_format=3)
-    img   = SpatialImage(data; axes=ax, channel_names=ch_names, coord_system=cs)
+    img   = SpatialImage(data; axes=ax, channel_names=ch_names, coord_system=cs, pixel_to_cs=p2cs)
     for p in paths[2:end]
         push!(img.pyramid, zopen(joinpath(grp, p), "r"; zarr_format=3))
     end
@@ -637,12 +640,16 @@ function _read_anndata_table_zarr(grp::String)
     X_meta   = JSON.parse(read(joinpath(grp, "X", "zarr.json"), String))
     n_obs, n_var = Int.(X_meta["attributes"]["shape"])
 
-    X = zeros(Float32, n_obs, n_var)
+    # Build sparse row-index vector from CSR indptr, then construct SparseMatrixCSC.
+    # Avoids the n_obs × n_var dense allocation that causes OOM on large tables.
+    nnz  = length(X_data)
+    rows = Vector{Int32}(undef, nnz)
     for i in 1:n_obs
         for j in (Int(X_indptr[i])+1):Int(X_indptr[i+1])
-            X[i, Int(X_indices[j])+1] += X_data[j]
+            rows[j] = i
         end
     end
+    X = sparse(rows, X_indices .+ Int32(1), X_data, n_obs, n_var)
 
     # Gene names from var/_index (zarr v3 string array)
     vnames = String[]

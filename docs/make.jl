@@ -17,6 +17,10 @@ makedocs(
             "explanation/coordinate_systems.md",
             "explanation/lazy_views.md",
         ],
+        "Tutorials" => [
+            "tutorials/xenium.md",
+            "tutorials/visium.md",
+        ],
         "Reference" => [
             "reference/dataset.md",
             "reference/elements.md",

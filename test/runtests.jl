@@ -1300,3 +1300,58 @@ end
     end
 
 end  # M11
+
+# ── M12 — Real data fixtures ──────────────────────────────────────────────────
+# These tests use committed zarr fixtures in test/data/ and run unconditionally
+# in CI. Generate the fixtures locally with: julia --project=. test/make_fixtures.jl
+
+@testset "SpatialOmics M12 — Real data fixtures" begin
+
+    xenium_path = joinpath(@__DIR__, "data", "xenium_small.zarr")
+    @testset "Xenium fixture" begin
+        if !isdir(xenium_path)
+            @warn "Xenium fixture not found at $xenium_path — run test/make_fixtures.jl to generate it"
+        else
+            ds  = read(SpatialDataZarr(), xenium_path)
+            tx  = points(ds, "transcripts")
+            shp = shapes(ds, "cell_boundaries")
+            img = images(ds, "morphology_focus")
+            lbl = labels(ds, "cell_labels")
+
+            @test length(coords(tx)) > 1_000
+            @test length(top_features(tx, 5)) == 5
+            @test !isempty(count_per_instance(tx))
+
+            @test length(geometries(shp)) > 10
+
+            @test nchannels(img) == 4
+            @test length(channel_names(img)) == 4
+
+            @test size(data(lbl), 1) > 0
+            @test size(data(lbl), 2) > 0
+
+            @test !isempty(coord_systems(ds))
+
+            close(ds)
+        end
+    end
+
+    visium_path = joinpath(@__DIR__, "data", "visium_small.zarr")
+    @testset "Visium fixture" begin
+        if !isdir(visium_path)
+            @warn "Visium fixture not found at $visium_path — run test/make_fixtures.jl to generate it"
+        else
+            ds  = read(SpatialDataZarr(), visium_path)
+            shp = shapes(ds, "Visium_HD_Mouse_Small_Intestine_square_016um")
+            img = images(ds, "Visium_HD_Mouse_Small_Intestine_lowres_image")
+
+            @test length(geometries(shp)) > 50
+
+            @test ndims(data(img)) >= 2
+            @test size(data(img), 1) > 0
+
+            close(ds)
+        end
+    end
+
+end  # M12

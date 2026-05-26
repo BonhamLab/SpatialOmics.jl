@@ -50,7 +50,7 @@ roi = view(ds, SpatialExtent(1000.0, 2000.0, 500.0, 1500.0; coord_system="global
 
 fig = Figure(size=(600, 600))
 ax  = Axis(fig[1, 1]; aspect=DataAspect(), yreversed=true)
-heatmap!(ax, images(roi, "morphology"))        # crops image to extent
+image!(ax,   scaleminmax(channel(images(roi, "morphology"), 1)))  # crops image to extent
 poly!(ax,    shapes(roi, "cell_boundaries"))   # filters shapes by extent
 scatter!(ax, points(roi, "transcripts"))       # filters points by extent
 fig
