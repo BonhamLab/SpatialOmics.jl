@@ -155,7 +155,7 @@ function _read_points_zarr(grp::String) :: SpatialPoints{Float32}
     meta = JSON.parse(read(joinpath(grp, "zarr.json"), String))
     cs   = meta["attributes"]["_spatialdata_attrs"]["coord_system"]
 
-    SpatialPoints{Float32}(coords, feature_id, codebook, instance_id, cs, nothing)
+    SpatialPoints{Float32}(coords, feature_id, codebook, instance_id, nothing, cs, nothing)
 end
 
 # ── Read SpatialShapes ─────────────────────────────────────────────────────────

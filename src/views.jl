@@ -271,7 +271,8 @@ function Base.collect(v::SpatialElementView{<:SpatialPoints})
     p = v.parent
     T = eltype(eltype(p.coords))
     SpatialPoints{T}(p.coords[mask], p.feature_id[mask], copy(p.feature_codebook),
-                     p.instance_id[mask], p.coord_system, nothing)
+                     p.instance_id[mask], _subset_feature_columns(p.feature_columns, mask),
+                     p.coord_system, nothing)
 end
 
 function Base.collect(v::SpatialElementView{<:SpatialShapes})
@@ -290,7 +291,9 @@ Base.length(v::SpatialElementView) = count(_mask(v.parent, v.roi, v.overlap))
 coord_system(v::SpatialElementView) = coord_system(v.parent)
 coord_system(v::SpatialDatasetView) = coord_system(v.roi)
 
-features(v::SpatialElementView{<:SpatialPoints})     = v.parent.feature_codebook
+features(v::SpatialElementView{<:SpatialPoints})                = v.parent.feature_codebook
+features(v::SpatialElementView{<:SpatialPoints}, col::Symbol)   =
+    getproperty(v.parent.feature_columns, col)[_mask(v.parent, v.roi, v.overlap)]
 
 geometries(v::SpatialElementView{<:SpatialShapes}) =
     v.parent.geometries[_mask(v.parent, v.roi, v.overlap)]

@@ -5,7 +5,7 @@ makedocs(
     sitename = "SpatialOmics.jl",
     authors  = "Kevin Bonham",
     modules  = [SpatialOmics],
-    remotes  = nothing,
+    repo     = Documenter.Remotes.GitHub("BonhamLab", "SpatialOmics.jl"),
     format   = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
         canonical  = "https://BonhamLab.github.io/SpatialOmics.jl",
@@ -42,7 +42,7 @@ makedocs(
 
 if get(ENV, "CI", nothing) == "true"
     deploydocs(
-        repo         = "github.com/BonhamLab/SpatialOmics.jl.git",
+        repo         = Documenter.Remotes.GitHub("BonhamLab", "SpatialOmics.jl"),
         target       = "build",
         push_preview = true,
     )

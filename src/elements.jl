@@ -38,6 +38,7 @@ mutable struct SpatialPoints{T<:AbstractFloat}
     feature_id       :: Vector{Int32}
     feature_codebook :: Vector{String}
     instance_id      :: Vector{Int32}
+    feature_columns  :: Union{Nothing, NamedTuple}
     coord_system     :: String
     _attachment      :: Union{Nothing, Tuple{WeakRef, String}}
 end
@@ -47,14 +48,16 @@ function SpatialPoints(coords::Vector{Point{2,T}};
                        feature_id::Vector{Int32}=zeros(Int32, length(coords)),
                        feature_codebook::Vector{String}=String[],
                        instance_id::Vector{Int32}=zeros(Int32, length(coords)),
+                       features::Union{Nothing, NamedTuple}=nothing,
                        coord_system::String="") where T<:AbstractFloat
-    SpatialPoints{T}(coords, feature_id, feature_codebook, instance_id, coord_system, nothing)
+    SpatialPoints{T}(coords, feature_id, feature_codebook, instance_id, features, coord_system, nothing)
 end
 
-# Tables.jl constructor — columns must have x and y; gene is optional
+# Tables.jl constructor — columns must have x and y; gene and features are optional
 function SpatialPoints(table;
                        x::Symbol=:x, y::Symbol=:y,
                        gene::Union{Symbol,Nothing}=nothing,
+                       features::Union{Nothing, NamedTuple}=nothing,
                        coord_system::String="")
     cols = Tables.columntable(table)
     xs = cols[x]
@@ -71,7 +74,7 @@ function SpatialPoints(table;
         codebook = String[]
         feature_id = zeros(Int32, n)
     end
-    SpatialPoints{T}(coords, feature_id, codebook, zeros(Int32, n), coord_system, nothing)
+    SpatialPoints{T}(coords, feature_id, codebook, zeros(Int32, n), features, coord_system, nothing)
 end
 
 Base.length(pts::SpatialPoints) = length(pts.coords)
@@ -95,11 +98,27 @@ coords(pts::SpatialPoints)       = pts.coords
 
 """
     features(pts) → Vector{String}
+    features(pts, col) → Vector
 
-Return the feature codebook — the unique feature labels (gene names, cell types, …)
-present in `pts`, in the order used by `feature_ids`.
+Return the feature codebook (gene names / cell types) when called with one argument,
+or a named extra column when called with a `Symbol`:
+
+```julia
+features(pts)     # → ["Actb", "Epcam", …]  gene names
+features(pts, :z) # → [3, 5, 3, …]           z-slice per point
+```
+
+Extra columns are stored via the `features` keyword at construction time:
+```julia
+pts = SpatialPoints(df; gene=:gene, features=(z=df.z,), coord_system="global_px")
+```
 """
-features(pts::SpatialPoints)     = pts.feature_codebook
+features(pts::SpatialPoints)                = pts.feature_codebook
+features(pts::SpatialPoints, col::Symbol)   = getproperty(pts.feature_columns, col)
+
+_subset_feature_columns(::Nothing, _)       = nothing
+_subset_feature_columns(nt::NamedTuple, idx) =
+    NamedTuple{keys(nt)}(map(v -> v[idx], values(nt)))
 
 """
     coord_system(el) → String
@@ -260,7 +279,7 @@ function apply(t::AbstractTransformation, pts::SpatialPoints{T}) where T
         Point{2,T}(v[1], v[2])
     end
     SpatialPoints{T}(new_coords, copy(pts.feature_id), copy(pts.feature_codebook),
-                     copy(pts.instance_id), t.dst, nothing)
+                     copy(pts.instance_id), pts.feature_columns, t.dst, nothing)
 end
 
 """
@@ -326,7 +345,7 @@ _set_backref!(::Any, ::SpatialDataset, ::String) = nothing  # no-op for other ty
 
 function Base.copy(pts::SpatialPoints{T}) where T
     SpatialPoints{T}(copy(pts.coords), copy(pts.feature_id), copy(pts.feature_codebook),
-                     copy(pts.instance_id), pts.coord_system, nothing)
+                     copy(pts.instance_id), pts.feature_columns, pts.coord_system, nothing)
 end
 
 Base.copy(shp::SpatialShapes{G}) where G =
@@ -359,7 +378,14 @@ function subsample(pts::SpatialPoints{T}, n::Int) where T
     n >= length(pts) && return pts
     idx = sort!(randperm(length(pts))[1:n])
     SpatialPoints{T}(pts.coords[idx], pts.feature_id[idx], copy(pts.feature_codebook),
-                     pts.instance_id[idx], pts.coord_system, nothing)
+                     pts.instance_id[idx], _subset_feature_columns(pts.feature_columns, idx),
+                     pts.coord_system, nothing)
+end
+
+function Base.getindex(pts::SpatialPoints{T}, mask::AbstractVector{Bool}) where T
+    SpatialPoints{T}(pts.coords[mask], pts.feature_id[mask], copy(pts.feature_codebook),
+                     pts.instance_id[mask], _subset_feature_columns(pts.feature_columns, mask),
+                     pts.coord_system, nothing)
 end
 
 # ── top_features ──────────────────────────────────────────────────────────────

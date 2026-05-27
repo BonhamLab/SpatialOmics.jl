@@ -1711,7 +1711,7 @@ uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 version = "1.12.0"
 
 [[deps.SpatialOmics]]
-deps = ["CSV", "CodecZlib", "Colors", "FixedPointNumbers", "GeoInterface", "GeometryBasics", "GeometryOps", "ImageBase", "Images", "JSON", "MappedArrays", "OrderedCollections", "Parquet2", "Random", "StaticArrays", "Tables", "TiffImages", "Zarr"]
+deps = ["CSV", "CodecZlib", "Colors", "FixedPointNumbers", "GeoInterface", "GeometryBasics", "GeometryOps", "ImageBase", "Images", "JSON", "Logging", "MappedArrays", "OrderedCollections", "Parquet2", "Random", "SparseArrays", "StaticArrays", "Tables", "TiffImages", "Zarr"]
 path = ".."
 uuid = "7c9a2e4e-8f1d-4a6b-b84c-3e8a9f2d1c5e"
 version = "0.2.0"
