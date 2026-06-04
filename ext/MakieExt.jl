@@ -4,6 +4,7 @@ using Makie
 using SpatialOmics
 using Colors: Gray, Colorant
 using FixedPointNumbers: FixedPoint, Normed
+using LinearAlgebra: norm
 using StaticArrays: SVector
 using ImageBase: restrict
 
@@ -95,11 +96,26 @@ function _materialise_level(v::SpatialImageColorView{C}, lvl) where C
     yi < xi ? permutedims(collect(cv), (2, 1)) : collect(cv)
 end
 
-function Makie.image!(ax::Makie.Axis, img::SpatialImage; kw...)
-    Makie.image!(ax, colorview(Gray, img); kw...)
+function _pseudocolor_view(img::SpatialImage{T,N}, color) where {T,N}
+    c  = convert(RGBf, Makie.to_color(color))
+    r, g, b = c.r, c.g, c.b
+    dt = img.display_transform
+    tf = dt === nothing ?
+        (v -> RGBf(r * Float32(v), g * Float32(v), b * Float32(v))) :
+        (v -> (s = Float32(dt(v)); RGBf(r * s, g * s, b * s)))
+    SpatialImageColorView{RGBf, T, N}(
+        img.data, img.pyramid, RGBf, tf,
+        img.coord_system, img.pixel_to_cs, img.axes)
+end
+
+function Makie.image!(ax::Makie.Axis, img::SpatialImage; color=nothing, kw...)
+    _register_cs!(ax, img.coord_system)
+    v = color === nothing ? colorview(Gray, img) : _pseudocolor_view(img, color)
+    Makie.image!(ax, v; kw...)
 end
 
 function Makie.image!(ax::Makie.Axis, v::SpatialImageColorView; kw...)
+    _register_cs!(ax, v.coord_system)
     x_range, y_range = _pixel_extent(v)
     xi = something(findfirst(==(:x), v.axes), 1)
     yi = something(findfirst(==(:y), v.axes), 2)
@@ -168,6 +184,7 @@ end
 # Constructs a ShapeColorView and draws polygons colored by an obs column.
 
 function Makie.poly!(ax::Makie.Axis, v::ShapeColorView; kw...)
+    _register_cs!(ax, v.shapes.coord_system)
     geoms = geometries(v.shapes)
     vals  = v.color_by ∈ propertynames(v.rel.obs) ?
             v.rel.obs[v.color_by] : ones(Int, length(geoms))
@@ -182,13 +199,40 @@ function Makie.poly!(ax::Makie.Axis, cells::SpatialShapes, rel::SpatialRelation;
     Makie.poly!(ax, ShapeColorView(cells, rel, color_by, colormap); kw...)
 end
 
-# ── Interactive ROI selection ─────────────────────────────────────────────────
+function Makie.scatter!(ax::Makie.Axis, pts::SpatialPoints; kw...)
+    _register_cs!(ax, pts.coord_system)
+    Makie.scatter!(ax, pts.coords; kw...)
+end
+
+function Makie.scatter!(ax::Makie.Axis, v::SpatialElementView{<:SpatialPoints}; kw...)
+    _register_cs!(ax, coord_system(v))
+    Makie.scatter!(ax, coords(v); kw...)
+end
+
+# ── Coordinate-system registration ───────────────────────────────────────────
+# Plot! overrides call _register_cs! so that roi/roi! can infer the
+# coord_system from whatever was already plotted on the axis.
+# WeakKeyDict lets axes be GC'd normally when figures are closed.
+
+const _axis_coord_system = WeakKeyDict{Makie.Axis, String}()
+
+function _register_cs!(ax::Makie.Axis, cs::String)
+    isempty(cs) && return
+    prev = get(_axis_coord_system, ax, cs)
+    prev == cs || @warn "Axis has elements from two coord systems: \"$prev\" and \"$cs\""
+    _axis_coord_system[ax] = cs
+end
+
+_infer_cs(ax::Makie.Axis, explicit::String) = isempty(explicit) ?
+    get(_axis_coord_system, ax, "") : explicit
+
+# ── Interactive ROI drawing ───────────────────────────────────────────────────
 
 # SpatialExtent from current axis limits
 function SpatialOmics.SpatialExtent(ax::Makie.Axis; coord_system::String="")
     r = ax.finallimits[]
     o = minimum(r); w = widths(r)
-    SpatialExtent(o[1], o[1]+w[1], o[2], o[2]+w[2]; coord_system)
+    SpatialExtent(o[1], o[1]+w[1], o[2], o[2]+w[2]; coord_system=_infer_cs(ax, coord_system))
 end
 
 # Per-axis session state for in-progress polygon drawing
@@ -200,17 +244,18 @@ function _teardown_roi!(ax)
     delete!(ax, sess.preview_lines)
     delete!(ax, sess.preview_dots)
     delete!(ax, sess.first_dot)
-    Observables.off(sess.h_mouse)
-    Observables.off(sess.h_key)
+    off(sess.h_mouse)
+    off(sess.h_key)
     delete!(_active_roi_sessions, ax)
 end
 
 # Interactive polygon drawing. Left-click adds vertices; click within snap_px of
 # the first vertex (or press Enter) to close. Escape cancels.
-# Returns an Observable — check obs[] after closing.
-function SpatialOmics.select(ax::Makie.Axis, ::Type{SpatialROI};
-                              coord_system::String="", snap_px::Real=10, priority::Int=2)
+# Returns an Observable{Union{Nothing,SpatialROI}} — fires when the polygon closes.
+function SpatialOmics.roi(ax::Makie.Axis;
+                           coord_system::String="", snap_px::Real=10, priority::Int=2)
     _teardown_roi!(ax)
+    cs = _infer_cs(ax, coord_system)
 
     result      = Observable{Union{Nothing, SpatialROI}}(nothing)
     vertices    = Point2f[]
@@ -218,13 +263,13 @@ function SpatialOmics.select(ax::Makie.Axis, ::Type{SpatialROI};
     first_pt    = Observable(Point2f[])
 
     preview_lines = lines!(ax,  preview_pts; color=(:red, 0.7), linewidth=2)
-    preview_dots  = scatter!(ax, preview_pts; color=:red,  markersize=8)
-    first_dot     = scatter!(ax, first_pt;   color=:cyan, markersize=14, marker=:circle)
+    preview_dots  = Makie.scatter!(ax, preview_pts; color=:red,  markersize=8)
+    first_dot     = Makie.scatter!(ax, first_pt;   color=:cyan, markersize=14, marker=:circle)
 
     function close_polygon!()
         ring = copy(vertices)
         first(ring) ≈ last(ring) || push!(ring, ring[1])
-        result[] = SpatialROI(Polygon(ring); coord_system)
+        result[] = SpatialROI(Polygon(ring); coord_system=cs)
         _teardown_roi!(ax)
     end
 
@@ -236,12 +281,24 @@ function SpatialOmics.select(ax::Makie.Axis, ::Type{SpatialROI};
 
     h_mouse = on(events(ax.scene).mousebutton, priority=priority) do event
         is_mouseinside(ax.scene) || return Consume(false)
-        event.action == Mouse.press && event.button == Mouse.left || return Consume(false)
-        if length(vertices) >= 3
-            first_screen = Makie.project(ax.scene, vertices[1])
-            norm(first_screen - Point2f(events(ax.scene).mouseposition[])) < snap_px &&
-                (close_polygon!(); return Consume(false))
+        event.action == Mouse.press || return Consume(false)
+
+        if event.button == Mouse.right
+            length(vertices) >= 3 && close_polygon!()
+            return Consume(false)
         end
+
+        event.button == Mouse.left || return Consume(false)
+
+        if length(vertices) >= 3
+            lims    = ax.finallimits[]
+            vp      = ax.scene.viewport[]
+            diff    = vertices[1] - mouseposition(ax)
+            px_dist = norm(Point2f(diff[1] * vp.widths[1] / lims.widths[1],
+                                    diff[2] * vp.widths[2] / lims.widths[2]))
+            px_dist < snap_px && (close_polygon!(); return Consume(false))
+        end
+
         push!(vertices, mouseposition(ax))
         update_preview!()
         return Consume(false)
@@ -260,6 +317,22 @@ function SpatialOmics.select(ax::Makie.Axis, ::Type{SpatialROI};
 
     _active_roi_sessions[ax] = (; preview_lines, preview_dots, first_dot, h_mouse, h_key)
     return result
+end
+
+function SpatialOmics.roi!(ds::SpatialDataset, ax::Makie.Axis;
+                            name::String,
+                            force::Bool    = false,
+                            coord_system::String = "",
+                            snap_px::Real = 10,
+                            priority::Int  = 2)
+    !force && haskey(ds, name) &&
+        error("Dataset already has an element \"$name\". Pass force=true to overwrite.")
+    roi_obs = SpatialOmics.roi(ax; coord_system, snap_px, priority)
+    on(roi_obs) do r
+        r === nothing && return
+        ds[name] = SpatialShapes(r; instance_id=Int32(1))
+    end
+    roi_obs
 end
 
 end

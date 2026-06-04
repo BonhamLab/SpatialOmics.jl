@@ -6,6 +6,7 @@ using Tables
 using StaticArrays
 using OrderedCollections
 using GeometryOps
+using FlexiJoins
 using Zarr
 using JSON
 using Parquet2
@@ -25,7 +26,8 @@ export
     # Transformations
     AbstractTransformation,
     Identity, Affine, Sequence,
-    translation, scaling, rotation, flip_y, compose,
+    # translation, scaling, rotation, flip_y, compose — not exported; clash with Makie/LinearAlgebra.
+    # Use SpatialOmics.translation(...) etc. when constructing pixel_to_cs transforms.
     apply, apply!, resolve,
     # Dataset
     BackingStore, SpatialDataset,
@@ -41,15 +43,15 @@ export
     # Views
     SpatialExtent, SpatialROI,
     SpatialElementView, SpatialDatasetView,
-    geometry, select,
+    geometry, roi, roi!,
     # Images + Labels
     SpatialImage, SpatialLabels,
     data, nchannels, channel_names, build_pyramid!, images, labels,
     SpatialImageColorView, channel, scaleminmax, colorview, Gray, RGB,
     # Relations
-    RelationKind, Membership, Proximity, KNN, Expression,
+    RelationKind, Membership, Expression,
     SpatialRelation,
-    relations, nobs, nvar, var_names,
+    relations, nobs, nvar, obs_names, var_names,
     annotate,
     # Analysis
     analyze, distances,

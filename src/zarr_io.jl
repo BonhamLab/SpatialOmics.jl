@@ -201,7 +201,7 @@ _transform_to_dict(::AbstractTransformation) =
 function _transform_from_dict(d)
     if d["type"] == "affine"
         rows = d["matrix"]
-        mat  = SMatrix{3,3,Float64}(Float64(rows[j][i]) for i in 1:3, j in 1:3)
+        mat  = SMatrix{3,3,Float64}(Float64(rows[i][j]) for i in 1:3, j in 1:3)
         Affine(mat, d["src"], d["dst"])
     else
         Identity(d["src"], d["dst"])
@@ -309,8 +309,6 @@ end
 function _kind_meta(kind::Membership{strict}) where strict
     Dict("kind" => "Membership", "strict" => strict)
 end
-_kind_meta(::KNN)        = Dict("kind" => "KNN")
-_kind_meta(::Proximity)  = Dict("kind" => "Proximity")
 _kind_meta(::Expression) = Dict("kind" => "Expression")
 
 function _write_zarr_relation(root::String, name::String, rel::SpatialRelation)
@@ -336,8 +334,6 @@ end
 function _kind_from_meta(d::AbstractDict)
     k = String(d["kind"])
     k == "Expression" && return Expression()
-    k == "Proximity"  && return Proximity()
-    k == "KNN"        && return KNN(get(d, "k", 30))
     strict = Bool(get(d, "strict", false))
     strict ? Membership{true}() : Membership{false}()
 end

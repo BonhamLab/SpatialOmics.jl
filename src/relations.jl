@@ -27,36 +27,6 @@ Assignment of source observations to containing destination shapes.
 struct Membership{strict} <: RelationKind end
 Membership(; strict::Bool=false) = Membership{strict}()
 
-"""
-    Proximity()
-
-Relation kind for a pairwise distance matrix between elements.
-
-The `weights` field of the resulting `SpatialRelation` is a symmetric N×N
-`Float32` matrix of centroid distances. Boolean within-radius queries can be
-derived as `weights .< r`.
-
-# See also
-[`distances`](@ref), [`KNN`](@ref)
-"""
-struct Proximity <: RelationKind end
-
-"""
-    KNN(; k=30)
-
-Relation kind for a k-nearest-neighbour graph.
-
-The resulting `SpatialRelation` has a N×k weight matrix and a flat N*k
-`dst_ids` edge list. Requires a NearestNeighbors.jl backend:
-`using NearestNeighbors`.
-
-# See also
-[`Proximity`](@ref), [`analyze`](@ref)
-"""
-struct KNN <: RelationKind
-    k :: Int
-end
-KNN(; k::Int = 30) = KNN(k)
 
 """
     Expression()
@@ -157,6 +127,22 @@ function nvar(rel::SpatialRelation{Expression})
 end
 
 """
+    obs_names(rel) → Vector{String}
+
+Return observation names for a relation.
+
+Uses the `:name` column from `rel.obs` if available; otherwise falls back to
+string-formatted `src_ids`. Add names via `annotate(rel, names; key=:name)`.
+
+# See also
+[`var_names`](@ref), [`annotate`](@ref)
+"""
+function obs_names(rel::SpatialRelation)
+    t = Tables.columntable(rel.obs)
+    hasproperty(t, :name) ? collect(String, t.name) : string.(rel.src_ids)
+end
+
+"""
     var_names(rel) → Vector{String}
 
 Return gene or variable names for an `Expression` relation.
@@ -172,6 +158,65 @@ function var_names(rel::SpatialRelation{Expression})
     Tables.columnnames(t) !== () && hasproperty(t, :name) ?
         collect(t.name) : string.(1:nvar(rel))
 end
+
+# ── getindex — Expression row/col access by instance_id / gene name ──────────
+
+const _RowIdx = Union{Colon, Integer, AbstractString,
+                       AbstractVector{<:Integer}, AbstractVector{<:AbstractString}}
+const _ColIdx = Union{Colon, AbstractString, AbstractVector{<:AbstractString}}
+
+_row_idx(::SpatialRelation, ::Colon) = Colon()
+function _row_idx(rel::SpatialRelation, id::Integer)
+    i = findfirst(==(Int32(id)), rel.src_ids)
+    isnothing(i) && error("instance_id $id not found in relation")
+    i
+end
+function _row_idx(rel::SpatialRelation, name::AbstractString)
+    obs = Tables.columntable(rel.obs)
+    hasproperty(obs, :name) ||
+        error("relation has no obs.name column; annotate with key=:name first")
+    i = findfirst(==(name), obs.name)
+    isnothing(i) && error("obs name $(repr(name)) not found; available: $(obs.name)")
+    i
+end
+_row_idx(rel::SpatialRelation, ids::AbstractVector{<:Integer})     = [_row_idx(rel, id)   for id   in ids]
+_row_idx(rel::SpatialRelation, names::AbstractVector{<:AbstractString}) = [_row_idx(rel, n) for n in names]
+
+_col_idx(::SpatialRelation, ::Colon) = Colon()
+function _col_idx(rel::SpatialRelation{Expression}, name::AbstractString)
+    i = findfirst(==(name), var_names(rel))
+    isnothing(i) && error("variable $(repr(name)) not found; available: $(var_names(rel))")
+    i
+end
+_col_idx(rel::SpatialRelation{Expression}, names::AbstractVector{<:AbstractString}) =
+    [_col_idx(rel, n) for n in names]
+
+"""
+    rel[rows, cols]
+
+Index into an `Expression` relation. Dim 1 is the **container** (observation),
+dim 2 is the **variable** (gene, cell type, etc.). Position determines semantics —
+there is no ambiguity even when both axes carry string labels.
+
+Both axes accept a singleton, a vector, or `:` (all):
+- `rel[:, "Col1a1"]`               → `Vector{Float32}` — all obs, one gene
+- `rel[47, :]`                     → `Vector{Float32}` — one obs, all genes
+- `rel[47, "Col1a1"]`              → `Float32` scalar
+- `rel[[47, 83], :]`               → `Matrix{Float32}`
+- `rel[:, ["Col1a1","Epcam"]]`     → `Matrix{Float32}`
+
+**Row axis** accepts integer instance IDs or, after `annotate(rel, names; key=:name)`,
+string observation names:
+- `rel["germinal_center", "Col1a1"]` — looks up row by `obs.name`
+- `rel[["GC","TZ"], :]`             — multi-name row slice
+
+**Column axis** always uses gene/variable names (strings from `var_names(rel)`).
+
+# See also
+[`obs_names`](@ref), [`var_names`](@ref), [`annotate`](@ref), [`SpatialRelation`](@ref)
+"""
+Base.getindex(rel::SpatialRelation{Expression}, rows::_RowIdx, cols::_ColIdx) =
+    rel.weights[_row_idx(rel, rows), _col_idx(rel, cols)]
 
 # ── annotate — pure: returns new SpatialRelation with obs column added ────────
 

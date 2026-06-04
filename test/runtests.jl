@@ -921,9 +921,10 @@ end
     # ── expression weight lookup ───────────────────────────────────────────────
 
     @testset "expression weight lookup" begin
-        actb_col = findfirst(==("Actb"), var_names(rel))
-        @test actb_col !== nothing
-        @test rel.weights[:, actb_col] ≈ [X[i, actb_col] for i in 1:n_cells]
+        actb_col = findfirst(==("Actb"), genes)
+        @test rel[:, "Actb"] ≈ X[:, actb_col]
+        @test rel[1, "Actb"] isa Float32
+        @test rel[[1, 2], "Actb"] isa Vector{Float32}
     end
 
     @testset "var_names lookup" begin
@@ -1232,13 +1233,6 @@ end
         @test rel.kind isa Membership
     end
 
-    # ── KNN stub fires without backend ───────────────────────────────────────
-
-    @testset "KNN stub error" begin
-        rel = analyze(pts, cells)
-        @test_throws ErrorException analyze(KNN(3), rel)
-    end
-
     # ── annotate — pure, shared weights ──────────────────────────────────────
 
     @testset "annotate" begin
@@ -1248,6 +1242,93 @@ end
         @test hasproperty(rel2.obs, :cell_type)
         @test rel2.obs.cell_type == labels
         @test rel2.weights === rel.weights        # no copy
+    end
+
+    # ── getindex — Expression relation ───────────────────────────────────────
+
+    @testset "getindex — scalar and slices by instance_id" begin
+        rel = analyze(Expression(), pts, cells)
+        # scalar: one cell, one gene
+        @test rel[1, "GeneA"] isa Float32
+        @test rel[1, "GeneA"] == 1f0
+        @test rel[2, "GeneB"] == 1f0
+        # all cells, one gene → Vector
+        v = rel[:, "GeneA"]
+        @test v isa Vector{Float32}
+        @test length(v) == 3
+        @test all(v .== 1f0)
+        # one cell, all genes → Vector
+        r = rel[1, :]
+        @test r isa Vector{Float32}
+        @test length(r) == 2
+        # multi-row by instance_ids, one gene → Vector
+        v2 = rel[[1, 3], "GeneA"]
+        @test v2 isa Vector{Float32}
+        @test length(v2) == 2
+        # multi-row, multi-gene → Matrix
+        M = rel[[1, 3], ["GeneA", "GeneB"]]
+        @test M isa Matrix{Float32}
+        @test size(M) == (2, 2)
+        # all cells, multi-gene → Matrix
+        @test size(rel[:, ["GeneA", "GeneB"]]) == (3, 2)
+        # multi-row, all genes → Matrix
+        @test size(rel[[1, 2], :]) == (2, 2)
+    end
+
+    @testset "getindex — string row via obs.name" begin
+        rel      = analyze(Expression(), pts, cells)
+        rel_named = annotate(rel, ["cell_T", "cell_B", "cell_M"]; key=:name)
+        @test rel_named["cell_T", "GeneA"] isa Float32
+        @test rel_named["cell_T", "GeneA"] == 1f0
+        v = rel_named[["cell_T", "cell_M"], :]
+        @test size(v) == (2, 2)
+        @test all(v .== 1f0)
+    end
+
+    @testset "getindex — error cases" begin
+        rel = analyze(Expression(), pts, cells)
+        @test_throws ErrorException rel[99, "GeneA"]         # instance_id not found
+        @test_throws ErrorException rel[1, "NoGene"]         # gene name not found
+        @test_throws ErrorException rel["cell_T", "GeneA"]   # no obs.name column
+    end
+
+    # ── obs_names ─────────────────────────────────────────────────────────────
+
+    @testset "obs_names" begin
+        rel = analyze(Expression(), pts, cells)
+        # no obs.name → fallback to string.(src_ids)
+        @test obs_names(rel) == string.(rel.src_ids)
+        @test length(obs_names(rel)) == 3
+        # with obs.name via annotate
+        rel_named = annotate(rel, ["T_cell", "B_cell", "Mac"]; key=:name)
+        @test obs_names(rel_named) == ["T_cell", "B_cell", "Mac"]
+    end
+
+    # ── multi-level analyze ───────────────────────────────────────────────────
+
+    @testset "multi-level analyze: cells → ROIs by cell_type" begin
+        # roi1 covers cells 1+2 (centroids at (5,5) and (25,5))
+        # roi2 covers cell 3  (centroid at (45,5))
+        rois = SpatialShapes(
+            [Polygon([Point2f(-1,-1), Point2f(35,-1), Point2f(35,11),
+                      Point2f(-1,11), Point2f(-1,-1)]),
+             Polygon([Point2f(35,-1), Point2f(55,-1), Point2f(55,11),
+                      Point2f(35,11), Point2f(35,-1)])];
+            instance_id=Int32.([10, 20]))
+        cell_obs = (cell_type = ["TypeA", "TypeA", "TypeB"],)
+        rel2 = analyze(cells, rois, cell_obs; by=:cell_type)
+        @test rel2.kind isa Expression
+        @test nobs(rel2) == 2
+        @test nvar(rel2) == 2
+        @test sort(var_names(rel2)) == ["TypeA", "TypeB"]
+        typeA_col = findfirst(==("TypeA"), var_names(rel2))
+        typeB_col = findfirst(==("TypeB"), var_names(rel2))
+        roi1_row  = findfirst(==(Int32(10)), rel2.src_ids)
+        roi2_row  = findfirst(==(Int32(20)), rel2.src_ids)
+        @test rel2.weights[roi1_row, typeA_col] == 2f0
+        @test rel2.weights[roi1_row, typeB_col] == 0f0
+        @test rel2.weights[roi2_row, typeA_col] == 0f0
+        @test rel2.weights[roi2_row, typeB_col] == 1f0
     end
 
     # ── distances ─────────────────────────────────────────────────────────────
