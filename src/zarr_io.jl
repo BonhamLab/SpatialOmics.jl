@@ -647,26 +647,26 @@ function _read_anndata_table_zarr(grp::String)
     end
     X = sparse(rows, X_indices .+ Int32(1), X_data, n_obs, n_var)
 
-    # Gene names from var/_index (zarr v3 string array)
-    vnames = String[]
-    try
-        raw = zopen(joinpath(grp, "var", "_index"), "r"; zarr_format=3)
-        vnames = String.(raw[:])
-    catch
-    end
+    # Zarr.jl v0.10 cannot read zarr v3 data_type "string" arrays.
+    # Check zarr.json metadata before opening to avoid a crash.
+    _zarr_dtype(path) = get(JSON.parse(read(joinpath(path, "zarr.json"), String)), "data_type", "")
 
+    var_index_path = joinpath(grp, "var", "_index")
+    vnames = if isdir(var_index_path) && _zarr_dtype(var_index_path) != "string"
+        String.(zopen(var_index_path, "r"; zarr_format=3)[:])
+    else
+        String[]
+    end
     var_nt = isempty(vnames) ? NamedTuple() : NamedTuple{(:name,)}((vnames,))
 
-    # obs: read instance_ids from obs/{instance_key} zarr array if present
+    # obs: integer instance_id arrays → src_ids directly.
+    # String arrays (e.g. Xenium cell barcodes) can't be read by Zarr.jl;
+    # fall back to synthetic 1:n_obs so nobs is correct.
     obs_ids_path = joinpath(grp, "obs", string(instance_key))
-    src_ids = if isdir(obs_ids_path)
-        try
-            Vector{Int32}(zopen(obs_ids_path, "r"; zarr_format=3)[:])
-        catch
-            Int32[]
-        end
+    src_ids = if isdir(obs_ids_path) && _zarr_dtype(obs_ids_path) != "string"
+        Vector{Int32}(zopen(obs_ids_path, "r"; zarr_format=3)[:])
     else
-        Int32[]
+        Int32.(1:n_obs)
     end
 
     src_str = isnothing(region) ? "" : region

@@ -11,30 +11,30 @@ using Test
     end
 
     @testset "Transformations — construction" begin
-        t = translation(10.0, -5.0, "fov_1", "global")
+        t = SpatialOmics.translation(10.0, -5.0, "fov_1", "global")
         @test t isa Affine
         @test t.src == "fov_1"
         @test t.dst == "global"
 
-        s = scaling(2.0, 2.0, "px", "µm")
+        s = SpatialOmics.scaling(2.0, 2.0, "px", "µm")
         @test s isa Affine
 
-        r = rotation(π/4, "a", "b")
+        r = SpatialOmics.rotation(π/4, "a", "b")
         @test r isa Affine
 
-        f = flip_y("local", "global")
+        f = SpatialOmics.flip_y("local", "global")
         @test f isa Affine
     end
 
     @testset "Transformations — apply" begin
         # translation
         pts = [1.0 2.0; 3.0 4.0]   # 2×2
-        t = translation(10.0, 20.0, "a", "b")
+        t = SpatialOmics.translation(10.0, 20.0, "a", "b")
         out = apply(t, pts)
         @test out ≈ [11.0 22.0; 13.0 24.0]
 
         # flip_y
-        f = flip_y("a", "b")
+        f = SpatialOmics.flip_y("a", "b")
         out2 = apply(f, pts)
         @test out2 ≈ [1.0 -2.0; 3.0 -4.0]
 
@@ -43,16 +43,16 @@ using Test
         @test apply(id, pts) === pts
 
         # compose two translations
-        t1 = translation(1.0, 0.0, "a", "b")
-        t2 = translation(0.0, 1.0, "b", "c")
-        tc = compose(t1, t2)
+        t1 = SpatialOmics.translation(1.0, 0.0, "a", "b")
+        t2 = SpatialOmics.translation(0.0, 1.0, "b", "c")
+        tc = SpatialOmics.compose(t1, t2)
         @test apply(tc, [0.0 0.0]) ≈ [1.0 1.0]
     end
 
     @testset "Transformations — resolve / Dijkstra" begin
         transforms = AbstractTransformation[
-            translation(100.0, 200.0, "fov_1", "global"),
-            scaling(0.5, 0.5, "px", "µm"),
+            SpatialOmics.translation(100.0, 200.0, "fov_1", "global"),
+            SpatialOmics.scaling(0.5, 0.5, "px", "µm"),
         ]
         t = resolve(transforms, "fov_1", "global")
         @test t isa Affine
@@ -66,8 +66,8 @@ using Test
     end
 
     @testset "Sequence apply" begin
-        t1 = translation(1.0, 0.0, "a", "b")
-        t2 = translation(0.0, 1.0, "b", "c")
+        t1 = SpatialOmics.translation(1.0, 0.0, "a", "b")
+        t2 = SpatialOmics.translation(0.0, 1.0, "b", "c")
         seq = Sequence([t1, t2], "a", "c")
         out = apply(seq, [0.0 0.0])
         @test out ≈ [1.0 1.0]
@@ -75,7 +75,7 @@ using Test
 
     @testset "apply on SVector / Point2f" begin
         using StaticArrays
-        t = translation(10.0, 20.0, "a", "b")
+        t = SpatialOmics.translation(10.0, 20.0, "a", "b")
 
         # single SVector{2}
         p = SVector(1.0, 2.0)
@@ -98,14 +98,14 @@ using Test
         @test apply(id, pts) === pts
 
         # Sequence on vector of SVectors
-        t1 = translation(1.0, 0.0, "a", "b")
-        t2 = translation(0.0, 1.0, "b", "c")
+        t1 = SpatialOmics.translation(1.0, 0.0, "a", "b")
+        t2 = SpatialOmics.translation(0.0, 1.0, "b", "c")
         seq = Sequence([t1, t2], "a", "c")
         svec_pts = [SVector(0.0, 0.0)]
         @test apply(seq, svec_pts)[1] ≈ SVector(1.0, 1.0)
 
         # flip_y on SVector
-        f = flip_y("a", "b")
+        f = SpatialOmics.flip_y("a", "b")
         @test apply(f, SVector(3.0, 4.0)) ≈ SVector(3.0, -4.0)
     end
 
@@ -169,7 +169,7 @@ using Test
             @test "global" in coord_systems(ds)
             @test "fov_1" in coord_systems(ds)
 
-            t = translation(500.0, 300.0, "fov_1", "global")
+            t = SpatialOmics.translation(500.0, 300.0, "fov_1", "global")
             push!(ds, t)
             resolved = transform(ds, "fov_1", "global")
             @test resolved isa Affine
@@ -240,7 +240,7 @@ end
 
     @testset "SpatialPoints — apply (copy)" begin
         pts = SpatialPoints([Point2f(0, 0), Point2f(1, 0)]; coord_system="fov_1")
-        t = translation(10.0, 20.0, "fov_1", "global")
+        t = SpatialOmics.translation(10.0, 20.0, "fov_1", "global")
         pts2 = apply(t, pts)
         @test pts2 isa SpatialPoints{Float32}
         @test coord_system(pts2) == "global"
@@ -252,7 +252,7 @@ end
 
     @testset "SpatialPoints — apply! (in-place)" begin
         pts = SpatialPoints([Point2f(0, 0), Point2f(1, 0)]; coord_system="fov_1")
-        t = translation(10.0, 20.0, "fov_1", "global")
+        t = SpatialOmics.translation(10.0, 20.0, "fov_1", "global")
         result = apply!(t, pts)
         @test result === pts                          # same object
         @test coord_system(pts) == "global"
@@ -283,7 +283,7 @@ end
     @testset "SpatialShapes — apply (copy)" begin
         ring = [Point2f(0,0), Point2f(1,0), Point2f(1,1), Point2f(0,1), Point2f(0,0)]
         shp = SpatialShapes([Polygon(ring)]; coord_system="fov_1")
-        t = translation(10.0, 20.0, "fov_1", "global")
+        t = SpatialOmics.translation(10.0, 20.0, "fov_1", "global")
         shp2 = apply(t, shp)
         @test coord_system(shp2) == "global"
         @test GeoInterface.coordinates(geometries(shp2)[1])[1][1][1] ≈ 10.0  # x shifted
@@ -314,7 +314,7 @@ end
     @testset "SpatialShapes — apply! (in-place)" begin
         ring = [Point2f(0,0), Point2f(1,0), Point2f(1,1), Point2f(0,1), Point2f(0,0)]
         shp = SpatialShapes([Polygon(ring)]; coord_system="fov_1")
-        t = translation(10.0, 20.0, "fov_1", "global")
+        t = SpatialOmics.translation(10.0, 20.0, "fov_1", "global")
         result = apply!(t, shp)
         @test result === shp
         @test coord_system(shp) == "global"
@@ -730,7 +730,7 @@ end
     end
 
     @testset "SpatialImage pixel_to_cs custom" begin
-        t = translation(10.0, 20.0, "pixel", "global")
+        t = SpatialOmics.translation(10.0, 20.0, "pixel", "global")
         arr = rand(Float32, 64, 64)
         img = SpatialImage(arr; coord_system="global", pixel_to_cs=t)
         @test img.pixel_to_cs isa Affine
@@ -811,7 +811,7 @@ end
     end
 
     @testset "SpatialImage zarr roundtrip — metadata preserved" begin
-        t = translation(5.0, 10.0, "pixel", "global")
+        t = SpatialOmics.translation(5.0, 10.0, "pixel", "global")
         arr = rand(Float32, 2, 32, 32)
         img = SpatialImage(arr;
                            axes=(:c, :y, :x),
