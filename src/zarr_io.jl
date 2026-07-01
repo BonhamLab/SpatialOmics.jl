@@ -620,6 +620,33 @@ function _read_points_parquet(grp::String)
                   instance_id=all_inst, coord_system=cs)
 end
 
+# ── zarr v3 vlen-utf8 string array reader ─────────────────────────────────────
+# Zarr.jl v0.10 cannot read data_type "string" arrays.
+# This handles the AnnData vlen-utf8 + optional zstd codec chain (single-chunk).
+# Binary layout after decompression: uint32 count, then per string: uint32 length + UTF-8 bytes.
+
+function _decode_vlen_utf8(raw::Vector{UInt8})
+    n   = Int(only(reinterpret(UInt32, raw[1:4])))
+    pos = 5
+    strings = Vector{String}(undef, n)
+    for i in 1:n
+        len = Int(only(reinterpret(UInt32, raw[pos:pos+3])))
+        strings[i] = String(copy(raw[pos+4 : pos+3+len]))
+        pos += 4 + len
+    end
+    strings
+end
+
+function _read_zarr_string_array(path::String)
+    meta   = JSON.parse(read(joinpath(path, "zarr.json"), String))
+    codecs = [c["name"] for c in get(meta, "codecs", [])]
+    "vlen-utf8" in codecs || error("expected vlen-utf8 codec at $path; got $codecs")
+    chunk_path = joinpath(path, "c", "0")
+    isfile(chunk_path) || error("expected single chunk at $chunk_path; multi-chunk string arrays not supported")
+    raw = read(chunk_path)
+    _decode_vlen_utf8("zstd" in codecs ? transcode(ZstdDecompressor, raw) : raw)
+end
+
 # ── AnnData zarr table reader ─────────────────────────────────────────────────
 
 function _read_anndata_table_zarr(grp::String)
@@ -647,30 +674,34 @@ function _read_anndata_table_zarr(grp::String)
     end
     X = sparse(rows, X_indices .+ Int32(1), X_data, n_obs, n_var)
 
-    # Zarr.jl v0.10 cannot read zarr v3 data_type "string" arrays.
-    # Check zarr.json metadata before opening to avoid a crash.
     _zarr_dtype(path) = get(JSON.parse(read(joinpath(path, "zarr.json"), String)), "data_type", "")
 
     var_index_path = joinpath(grp, "var", "_index")
-    vnames = if isdir(var_index_path) && _zarr_dtype(var_index_path) != "string"
-        String.(zopen(var_index_path, "r"; zarr_format=3)[:])
+    vnames = if isdir(var_index_path)
+        _zarr_dtype(var_index_path) == "string" ?
+            _read_zarr_string_array(var_index_path) :
+            String.(zopen(var_index_path, "r"; zarr_format=3)[:])
     else
         String[]
     end
     var_nt = isempty(vnames) ? NamedTuple() : NamedTuple{(:name,)}((vnames,))
 
-    # obs: integer instance_id arrays → src_ids directly.
-    # String arrays (e.g. Xenium cell barcodes) can't be read by Zarr.jl;
-    # fall back to synthetic 1:n_obs so nobs is correct.
+    # obs instance IDs: integer arrays → src_ids directly.
+    # String arrays (e.g. Xenium cell barcodes) → synthetic Int32 src_ids + obs.name.
     obs_ids_path = joinpath(grp, "obs", string(instance_key))
-    src_ids = if isdir(obs_ids_path) && _zarr_dtype(obs_ids_path) != "string"
-        Vector{Int32}(zopen(obs_ids_path, "r"; zarr_format=3)[:])
+    src_ids, obs_nt = if isdir(obs_ids_path)
+        if _zarr_dtype(obs_ids_path) == "string"
+            strs = _read_zarr_string_array(obs_ids_path)
+            Int32.(1:n_obs), NamedTuple{(:name,)}((strs,))
+        else
+            Vector{Int32}(zopen(obs_ids_path, "r"; zarr_format=3)[:]), NamedTuple()
+        end
     else
-        Int32.(1:n_obs)
+        Int32.(1:n_obs), NamedTuple()
     end
 
     src_str = isnothing(region) ? "" : region
-    SpatialRelation(Expression(), src_str, src_ids, X; var=var_nt)
+    SpatialRelation(Expression(), src_str, src_ids, X; obs=obs_nt, var=var_nt)
 end
 
 # ── Python SpatialData dataset reader ─────────────────────────────────────────

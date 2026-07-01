@@ -17,6 +17,7 @@ using MappedArrays: mappedarray
 using Colors: Colorant, Gray, RGB
 using Random: randperm
 using SparseArrays
+using CodecZstd
 import ImageBase.ImageCore: colorview
 using Images: load
 

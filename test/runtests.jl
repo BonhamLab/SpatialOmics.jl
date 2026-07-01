@@ -1136,6 +1136,9 @@ end  # M6
             tbl = relations(ds, "table")
             @test nvar(tbl) == 377
             @test nobs(tbl) > 0
+            @test length(var_names(tbl)) == 377
+            @test all(!isempty, var_names(tbl))
+            @test length(obs_names(tbl)) == nobs(tbl)
         end
     end
 
