@@ -182,16 +182,13 @@ apply(::Identity, pts::AbstractVector{<:StaticVector{2}}) = pts
 
 # Affine on a single 2D point (covers GeometryBasics.Point2f, SVector{2}, etc.)
 function apply(t::Affine, p::StaticVector{2,T}) where T<:Real
-    aug = SVector{3,Float64}(p[1], p[2], 1.0)
-    out = t.matrix * aug            # SMatrix{3,3,Float64} * SVector{3} → SVector{3}
+    out = t.matrix * SVector{3,Float64}(p[1], p[2], 1.0)
     SVector(out[1], out[2])
 end
 
 # Affine on N×2 matrix (bulk, for internal array paths)
 function apply(t::Affine, pts::AbstractMatrix{<:Real})
-    n = size(pts, 1)
-    aug = hcat(pts, ones(n))
-    out = (t.matrix * aug')'
+    out = (t.matrix * hcat(pts, ones(size(pts, 1)))' )'
     out[:, 1:2]
 end
 

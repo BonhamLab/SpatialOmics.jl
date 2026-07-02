@@ -48,10 +48,7 @@ end
 
 function _cleanup!(bs::BackingStore)
     bs.owned || return
-    try
-        close.(values(bs.handles))
-    catch
-    end
+    close.(values(bs.handles))
     rm(bs.path; recursive=true, force=true)
 end
 

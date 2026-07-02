@@ -311,6 +311,8 @@ function _kind_meta(kind::Membership{strict}) where strict
 end
 _kind_meta(::Expression) = Dict("kind" => "Expression")
 
+_write_zarr(::String, ::String, ::Any) = nothing  # SpatialTable and future types not yet serialized
+
 function _write_zarr_relation(root::String, name::String, rel::SpatialRelation)
     grp = joinpath(root, "relations", name)
     mkpath(grp)
@@ -368,9 +370,7 @@ function _write_dataset_zarr(ds::SpatialDataset, path::String)
         _write_group_meta(joinpath(path, subdir))
     end
     for (name, el) in ds.elements
-        if el isa SpatialPoints || el isa SpatialShapes || el isa SpatialImage || el isa SpatialLabels
-            _write_zarr(path, name, el)
-        end
+        _write_zarr(path, name, el)
     end
     for (name, rel) in ds.relations
         rel isa SpatialRelation && _write_zarr_relation(path, name, rel)
@@ -569,6 +569,11 @@ end
 
 # ── Parquet points reader ─────────────────────────────────────────────────────
 
+# cell_id columns may contain non-numeric strings (e.g. "UNASSIGNED") — map those to 0
+_to_inst_id(v::Integer)        = Int32(v)
+_to_inst_id(v::AbstractString) = something(tryparse(Int32, v), Int32(0))
+_to_inst_id(v)                 = Int32(0)
+
 function _read_points_parquet(grp::String)
     pq_dir   = joinpath(grp, "points.parquet")
     meta     = JSON.parse(read(joinpath(grp, "zarr.json"), String))
@@ -600,8 +605,7 @@ function _read_points_parquet(grp::String)
             append!(all_x,    Float32.(xs))
             append!(all_y,    Float32.(ys))
             append!(all_feat, String.(ft))
-            # cell_id may contain non-numeric strings (e.g. "UNASSIGNED") → 0
-            append!(all_inst, [try Int32(v) catch; Int32(0) end for v in id])
+            append!(all_inst, _to_inst_id.(id))
         end
     end
 

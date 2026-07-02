@@ -261,9 +261,8 @@ function _mask(pts::SpatialPoints, ext::SpatialExtent, ::Symbol=:any)
 end
 
 function _mask(pts::SpatialPoints, roi::SpatialROI, ::Symbol=:any)
-    pre = _mask(pts, roi.extent)
-    mask = copy(pre)
-    for i in findall(pre)
+    mask = copy(_mask(pts, roi.extent))
+    for i in findall(mask)
         mask[i] = GeometryOps.contains(roi.geometry, pts.coords[i])
     end
     mask

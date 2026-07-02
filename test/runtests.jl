@@ -1171,7 +1171,7 @@ end
                       ds.transforms)
 
             fovshp = shapes(ds, "fovs")
-            n_fovs = length(unique(ds.metadata["transcripts_annotations"].fov))
+            n_fovs = count(cs -> startswith(cs, "fov_"), keys(ds.coord_systems))
             @test length(fovshp) == n_fovs
             @test coord_system(fovshp) == "global_px"
 

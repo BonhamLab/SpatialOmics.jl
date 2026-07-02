@@ -63,8 +63,7 @@ function SpatialPoints(table;
     xs = cols[x]
     ys = cols[y]
     n = length(xs)
-    T = Float32
-    coords = [Point{2,T}(xs[i], ys[i]) for i in 1:n]
+    coords = [Point{2,Float32}(xs[i], ys[i]) for i in 1:n]
     if gene !== nothing && hasproperty(cols, gene)
         genes = cols[gene]
         codebook = unique(String.(genes))
@@ -74,7 +73,7 @@ function SpatialPoints(table;
         codebook = String[]
         feature_id = zeros(Int32, n)
     end
-    SpatialPoints{T}(coords, feature_id, codebook, zeros(Int32, n), features, coord_system, nothing)
+    SpatialPoints{Float32}(coords, feature_id, codebook, zeros(Int32, n), features, coord_system, nothing)
 end
 
 Base.length(pts::SpatialPoints) = length(pts.coords)
@@ -261,13 +260,12 @@ GeoInterface.getgeom(::GeoInterface.GeometryCollectionTrait, shp::SpatialShapes,
 
 function _transform_geom(t::AbstractTransformation, poly::Polygon)
     rings = GeoInterface.coordinates(poly)    # [[exterior_pts...], [hole_pts...], ...]
-    T = Float32
     new_rings = map(rings) do ring
-        [let v = apply(t, SVector{2,Float64}(pt[1], pt[2])); Point{2,T}(v[1], v[2]); end
+        [let v = apply(t, SVector{2,Float64}(pt[1], pt[2])); Point{2,Float32}(v[1], v[2]); end
          for pt in ring]
     end
     ext = new_rings[1]
-    holes = length(new_rings) > 1 ? new_rings[2:end] : Vector{Vector{Point{2,T}}}()
+    holes = length(new_rings) > 1 ? new_rings[2:end] : Vector{Vector{Point{2,Float32}}}()
     Polygon(ext, holes)
 end
 
