@@ -48,8 +48,9 @@ end
 _shift_origin(t::Identity, ::Int, ::Int) = t
 
 # Crop a SpatialLabels to a pixel rectangle and filter the instance_map.
+# axes are (:x, :y), so dim1=x, dim2=y — index as [xlo:xhi, ylo:yhi].
 function crop_labels(lbl::SpatialLabels, ylo::Int, yhi::Int, xlo::Int, xhi::Int)
-    raw = Array(lbl.data[ylo:yhi, xlo:xhi])
+    raw = Array(lbl.data[xlo:xhi, ylo:yhi])
     present = Set(raw)
     imap = Dict(k => v for (k, v) in lbl.instance_map if k in present)
     p2cs = _shift_origin(lbl.pixel_to_cs, xlo, ylo)

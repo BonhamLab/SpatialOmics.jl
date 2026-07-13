@@ -212,6 +212,7 @@ end
 
 function _write_zarr(root::String, name::String, img::SpatialImage{T}) where T
     grp = joinpath(root, "images", name)
+    isdir(joinpath(grp, "data")) && return   # already written at this path — skip
     mkpath(grp)
     _write_group_meta(grp, Dict(
         "_spatialdata_attrs" => Dict(
@@ -237,15 +238,11 @@ function _read_image_zarr(grp::String)
     p2cs    = _transform_from_dict(attrs["pixel_to_cs"])
     N       = length(ax)
 
-    raw  = zopen(joinpath(grp, "data"), "r"; zarr_format=3)
-    arr  = N == 2 ? raw[:, :] : raw[:, :, :]     # read into memory
-    img  = SpatialImage(arr; axes=ax, channel_names=names, coord_system=cs, pixel_to_cs=p2cs)
-
+    img = SpatialImage(zopen(joinpath(grp, "data"), "r"; zarr_format=3);
+                       axes=ax, channel_names=names, coord_system=cs, pixel_to_cs=p2cs)
     i = 1
     while isdir(joinpath(grp, "level$i"))
-        raw_l = zopen(joinpath(grp, "level$i"), "r"; zarr_format=3)
-        level = N == 2 ? raw_l[:, :] : raw_l[:, :, :]
-        push!(img.pyramid, level)
+        push!(img.pyramid, zopen(joinpath(grp, "level$i"), "r"; zarr_format=3))
         i += 1
     end
     img
@@ -278,8 +275,7 @@ function _read_labels_zarr(grp::String)
     p2cs  = _transform_from_dict(attrs["pixel_to_cs"])
     N     = length(ax)
 
-    raw  = zopen(joinpath(grp, "data"), "r"; zarr_format=3)
-    data = N == 2 ? raw[:, :] : raw[:, :, :]
+    data = zopen(joinpath(grp, "data"), "r"; zarr_format=3)
     T    = eltype(data)
 
     imap_path = joinpath(grp, "instance_map.json")
@@ -362,6 +358,89 @@ end
 
 # ── Dataset write ──────────────────────────────────────────────────────────────
 
+function _write_metadata_entry(root::String, key::String, val::NamedTuple)
+    grp = joinpath(root, "metadata", key)
+    mkpath(grp)
+    for (field, vec) in pairs(val)
+        fname = string(field)
+        if vec isa AbstractVector{<:Real}
+            _write_zarr_array(grp, fname, collect(vec))
+        elseif vec isa AbstractVector{<:AbstractString}
+            codebook = unique(vec)
+            idx_map  = Dict(s => Int32(i-1) for (i,s) in enumerate(codebook))
+            ids      = Int32[idx_map[s] for s in vec]
+            _write_zarr_array(grp, fname, ids)
+            open(joinpath(grp, fname * "_codebook.json"), "w") do io
+                JSON.print(io, codebook)
+            end
+        end
+    end
+    open(joinpath(grp, "type.json"), "w") do io
+        JSON.print(io, Dict("type" => "named_tuple"))
+    end
+end
+
+function _write_metadata_entry(root::String, key::String, val)
+    grp = joinpath(root, "metadata", key)
+    mkpath(grp)
+    open(joinpath(grp, "value.json"), "w") do io
+        JSON.print(io, val)
+    end
+end
+
+function _write_all_metadata(ds::SpatialDataset, path::String)
+    isempty(ds.metadata) && return
+    for (key, val) in ds.metadata
+        _write_metadata_entry(path, key, val)
+    end
+end
+
+function _read_user_metadata!(ds::SpatialDataset, path::String)
+    meta_dir = joinpath(path, "metadata")
+    isdir(meta_dir) || return
+    for key in readdir(meta_dir)
+        grp = joinpath(meta_dir, key)
+        isdir(grp) || continue
+        type_path = joinpath(grp, "type.json")
+        if isfile(type_path) && get(JSON.parse(read(type_path, String)), "type", "") == "named_tuple"
+            fields = Symbol[]
+            vecs   = AbstractVector[]
+            for entry in readdir(grp)
+                entry == "type.json"                && continue
+                endswith(entry, "_codebook.json")   && continue
+                !isdir(joinpath(grp, entry))        && continue
+                codebook_path = joinpath(grp, entry * "_codebook.json")
+                ids = zopen(joinpath(grp, entry), "r"; zarr_format=3)[:]
+                if isfile(codebook_path)
+                    codebook = convert(Vector{String},
+                                       JSON.parse(read(codebook_path, String)))
+                    push!(fields, Symbol(entry))
+                    push!(vecs, [codebook[id+1] for id in ids])
+                else
+                    push!(fields, Symbol(entry))
+                    push!(vecs, ids)
+                end
+            end
+            isempty(fields) && continue
+            ds.metadata.data[key] = NamedTuple{Tuple(fields)}(vecs)
+        elseif isfile(joinpath(grp, "value.json"))
+            ds.metadata.data[key] = JSON.parse(read(joinpath(grp, "value.json"), String))
+        end
+    end
+end
+
+function _write_spatialomics_meta(ds::SpatialDataset, path::String)
+    open(joinpath(path, "spatialomics_meta.json"), "w") do io
+        JSON.print(io, Dict(
+            "coord_systems" => [
+                Dict("name" => cs.name,
+                     "axes"  => collect(string.(cs.axes)),
+                     "units" => collect(cs.units))
+                for cs in values(ds.coord_systems)],
+            "transforms" => [_transform_to_dict(t) for t in ds.transforms]))
+    end
+end
+
 function _write_dataset_zarr(ds::SpatialDataset, path::String)
     mkpath(path)
     _init_zarr_root(path)
@@ -375,14 +454,8 @@ function _write_dataset_zarr(ds::SpatialDataset, path::String)
     for (name, rel) in ds.relations
         rel isa SpatialRelation && _write_zarr_relation(path, name, rel)
     end
-    open(joinpath(path, "spatialomics_meta.json"), "w") do io
-        JSON.print(io, Dict(
-            "coord_systems" => [
-                Dict("name" => cs.name,
-                     "axes"  => collect(string.(cs.axes)),
-                     "units" => collect(cs.units))
-                for cs in values(ds.coord_systems)]))
-    end
+    _write_spatialomics_meta(ds, path)
+    _write_all_metadata(ds, path)
     path
 end
 
@@ -417,15 +490,18 @@ end
 function Base.read(::SpatialDataZarr, path::String) :: SpatialDataset
     isdir(path) || error("Path not found: $path")
     _is_python_spatialdata(path) && return _read_python_spatialdata(path)
-    ds = SpatialDataset(; path, spill_threshold=typemax(Int))
+    ds = SpatialDataset(; path)
 
     meta_path = joinpath(path, "spatialomics_meta.json")
     if isfile(meta_path)
         meta = JSON.parse(read(meta_path, String))
         for cs in get(meta, "coord_systems", [])
-            push!(ds, CoordinateSystem(cs["name"];
-                                       axes  = Tuple(Symbol.(cs["axes"])),
-                                       units = Tuple(String.(cs["units"]))))
+            ds.coord_systems[cs["name"]] = CoordinateSystem(cs["name"];
+                                               axes  = Tuple(Symbol.(cs["axes"])),
+                                               units = Tuple(String.(cs["units"])))
+        end
+        for t in get(meta, "transforms", [])
+            push!(ds.transforms, _transform_from_dict(t))
         end
     end
 
@@ -440,6 +516,7 @@ function Base.read(::SpatialDataZarr, path::String) :: SpatialDataset
     for name in _zarr_element_names(path, "relations")
         ds.relations[name] = _read_relation_zarr(joinpath(path, "relations", name))
     end
+    _read_user_metadata!(ds, path)
     ds
 end
 
@@ -711,7 +788,7 @@ end
 # ── Python SpatialData dataset reader ─────────────────────────────────────────
 
 function _read_python_spatialdata(path::String)
-    ds = SpatialDataset(; path, spill_threshold=typemax(Int))
+    ds = SpatialDataset(; path)
     str_id_maps = Dict{String, Dict{Int32, String}}()
 
     for (kind, reader) in (("images", _read_ome_image_zarr_py),
@@ -752,32 +829,16 @@ function _read_python_spatialdata(path::String)
     end
 
     !isempty(str_id_maps) && (ds.metadata["_instance_id_str_map"] = str_id_maps)
+    # Register coord systems inferred from element metadata (Python format lacks explicit registry).
+    # Bypass push!(ds, ...) to avoid writing spatialomics_meta.json into the Python SpatialData store.
+    for (_, el) in ds.elements
+        cs = coord_system(el)
+        isempty(cs) && continue
+        haskey(ds.coord_systems, cs) || (ds.coord_systems[cs] = CoordinateSystem(cs))
+    end
     ds
 end
 
-# ── Spill on attach ────────────────────────────────────────────────────────────
-
-_element_bytes(pts::SpatialPoints{T}) where T =
-    (2 * sizeof(T) + 2 * sizeof(Int32)) * length(pts)
-
-_element_bytes(shp::SpatialShapes) =
-    sizeof(Float32) * 8 * length(shp)   # rough estimate: ~8 float32 coords per polygon vertex avg
-
-_element_bytes(rel::SpatialRelation) =
-    rel.weights === nothing ? 0 : sizeof(Float32) * length(rel.weights)
-_element_bytes(::Any) = 0
-
-function _spill_element!(bs::BackingStore, name::String, el)
-    _element_bytes(el) < bs.spill_threshold && return
-    (el isa SpatialPoints || el isa SpatialShapes) && _write_zarr(bs.path, name, el)
-    nothing
-end
-
-function _spill_relation!(bs::BackingStore, name::String, rel::SpatialRelation)
-    _element_bytes(rel) < bs.spill_threshold && return
-    _write_zarr_relation(bs.path, name, rel)
-    nothing
-end
 
 # ── CosMx flatFiles reader ────────────────────────────────────────────────────
 
@@ -905,16 +966,20 @@ function _stitch_morphology_to_zarr(morph2d_dir::String,
             @warn "Channel name count ($(length(channel_names))) ≠ TIFF channels ($n_ch); using defaults"
         ["channel_$i" for i in 1:n_ch]
     end
+    p2cs = translation(Float64(xmin), Float64(ymin), "pixel", "global_px")
     _write_group_meta(cache_path, Dict(
-        "channel_names" => ch_names,
-        "x_range"       => [Float64(xmin), Float64(xmax)],
-        "y_range"       => [Float64(ymin), Float64(ymax)]))
+        "_spatialdata_attrs" => Dict(
+            "type"          => "image",
+            "axes"          => ["x", "y", "c"],
+            "channel_names" => ch_names,
+            "coord_system"  => "global_px",
+            "pixel_to_cs"   => _transform_to_dict(p2cs))))
 
     # Julia array (canvas_w, canvas_h, n_ch) = (x, y, c); one channel per chunk
     # so each z[cx, cy, ch] write touches exactly one chunk with no read-modify-write.
     chunk_y = min(fov_h, canvas_h)
     chunk_x = min(fov_w, canvas_w)
-    z0_path = joinpath(cache_path, "0")
+    z0_path = joinpath(cache_path, "data")
     rm(z0_path; recursive=true, force=true)
     mkpath(z0_path)
     # Zarr.jl v3 reverses shape/chunks on read: zarr.json [A,B,C] → Julia size (C,B,A).
@@ -949,20 +1014,17 @@ end
 
 function _read_cosmx_morphology(zarr_path::String) :: SpatialImage{Float32}
     meta   = JSON.parse(read(joinpath(zarr_path, "zarr.json"), String))
-    attrs  = meta["attributes"]
-    ch_names = String.(attrs["channel_names"])
-    x_range  = Float64.(attrs["x_range"])
-    y_range  = Float64.(attrs["y_range"])
+    attrs  = meta["attributes"]["_spatialdata_attrs"]
+    ax     = Tuple(Symbol.(attrs["axes"]))
+    names  = String.(get(attrs, "channel_names", String[]))
+    cs     = attrs["coord_system"]
+    p2cs   = _transform_from_dict(attrs["pixel_to_cs"])
 
-    ax   = (:x, :y, :c)
-    p2cs = translation(x_range[1], y_range[1], "pixel", "global_px")
-
-    data = zopen(joinpath(zarr_path, "0"), "r"; zarr_format=3)
-    img  = SpatialImage(data; axes=ax, channel_names=ch_names,
-                        coord_system="global_px", pixel_to_cs=p2cs)
+    data = zopen(joinpath(zarr_path, "data"), "r"; zarr_format=3)
+    img  = SpatialImage(data; axes=ax, channel_names=names, coord_system=cs, pixel_to_cs=p2cs)
     i = 1
-    while isdir(joinpath(zarr_path, string(i)))
-        push!(img.pyramid, zopen(joinpath(zarr_path, string(i)), "r"; zarr_format=3))
+    while isdir(joinpath(zarr_path, "level$i"))
+        push!(img.pyramid, zopen(joinpath(zarr_path, "level$i"), "r"; zarr_format=3))
         i += 1
     end
     img
@@ -1101,7 +1163,7 @@ function Base.read(fmt::CosMx, path::String;
         mat = SMatrix{3,3,Float64}(1, 0, 0,
                                    0,-1, 0,
                                    fov_x[f], fov_y[f], 1)
-        push!(ds.transforms, Affine(mat, cs_name, "global_px"))
+        push!(ds, Affine(mat, cs_name, "global_px"))
     end
 
     ds["transcripts"] = transcripts
@@ -1132,6 +1194,8 @@ function Base.read(fmt::CosMx, path::String;
             ds["morphology"] = _read_cosmx_morphology(morph_zarr)
         end
     end
+
+    cache !== nothing && _write_spatialomics_meta(ds, ds.backing.path)
 
     ds
 end

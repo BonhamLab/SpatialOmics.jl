@@ -154,6 +154,7 @@ function SpatialLabels(data::AbstractArray{T, N};
 end
 
 coord_system(lbl::SpatialLabels)  = lbl.coord_system
+data(lbl::SpatialLabels)          = lbl.data
 
 """
     instance_ids(lbl) → Vector{Int32}

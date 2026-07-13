@@ -2,7 +2,7 @@
 # ── Backing store ─────────────────────────────────────────────────────────────
 
 """
-    BackingStore(; path=nothing, spill_threshold=64_000_000)
+    BackingStore(; path=nothing)
 
 Disk location for a dataset's Zarr storage, with ownership tracking.
 
@@ -11,20 +11,16 @@ store (deleted automatically when the parent `SpatialDataset` is garbage
 collected or `close`d). When `path` is supplied, the directory is used as-is
 and the store is *not* owned — no automatic cleanup occurs.
 
-`spill_threshold` (bytes) controls when large arrays are written to disk
-immediately on element attachment rather than held in memory.
-
 # See also
 [`SpatialDataset`](@ref), [`keep!`](@ref), [`with_dataset`](@ref)
 """
 mutable struct BackingStore
-    path            :: String
-    owned           :: Bool
-    spill_threshold :: Int                  # bytes; arrays larger than this spill to disk
-    handles         :: Dict{String, Any}    # element name → open zarr group handle
+    path    :: String
+    owned   :: Bool
+    handles :: Dict{String, Any}    # element name → open zarr group handle
 end
 
-function BackingStore(; path=nothing, spill_threshold=64_000_000)
+function BackingStore(; path=nothing)
     if path === nothing
         p = mktempdir(; prefix="spatialomics_")
         owned = true
@@ -34,15 +30,18 @@ function BackingStore(; path=nothing, spill_threshold=64_000_000)
         owned = false
     end
     _init_zarr_root(p)
-    BackingStore(p, owned, spill_threshold, Dict{String,Any}())
+    BackingStore(p, owned, Dict{String,Any}())
 end
 
 function _init_zarr_root(path::String)
-    # Write minimal SpatialData-compatible zarr root metadata
     zarr_json = joinpath(path, "zarr.json")
     isfile(zarr_json) && return
     open(zarr_json, "w") do io
         write(io, """{"zarr_format":3,"node_type":"group","attributes":{"spatialdata_attrs":{"version":"0.2.0"}}}""")
+    end
+    # Write spatialomics_meta.json so new stores are not mistaken for Python SpatialData format
+    open(joinpath(path, "spatialomics_meta.json"), "w") do io
+        write(io, """{"coord_systems":[]}""")
     end
 end
 
@@ -55,7 +54,7 @@ end
 # ── Dataset ───────────────────────────────────────────────────────────────────
 
 """
-    SpatialDataset(; path=nothing, spill_threshold=64_000_000, metadata=Dict())
+    SpatialDataset(; path=nothing, metadata=Dict())
 
 Root container for a spatial omics experiment.
 
@@ -66,7 +65,8 @@ metadata. Follows the [SpatialData specification](https://spatialdata.scverse.or
 
 All data is backed by a `BackingStore` Zarr directory. When `path` is `nothing`,
 a temporary directory is used and cleaned up automatically. Supply `path` to
-write directly to a persistent location.
+write directly to a persistent location. Every `setindex!` call writes the
+element to disk immediately — the dataset is always on disk.
 
 ```julia
 ds = SpatialDataset()                          # temp-backed
@@ -77,23 +77,60 @@ ds = SpatialDataset(path="/data/exp.zarr")     # persistent-backed
 [`BackingStore`](@ref), [`with_dataset`](@ref), [`keep!`](@ref),
 [`elements`](@ref), [`coord_systems`](@ref), [`relations`](@ref)
 """
+# ── Backed metadata dict ──────────────────────────────────────────────────────
+
+"""
+    BackedMetadata
+
+Dict-like container for dataset metadata that writes each entry to the backing
+store immediately on assignment, keeping disk and memory in sync.  Accessed
+as `ds.metadata`.
+
+String and integer keys are converted to `String` automatically.
+"""
+mutable struct BackedMetadata <: AbstractDict{String, Any}
+    data    :: Dict{String, Any}
+    backing :: BackingStore
+end
+
+function Base.setindex!(bm::BackedMetadata, val, key::String)
+    bm.data[key] = val
+    _write_metadata_entry(bm.backing.path, key, val)   # defined in zarr_io.jl
+    bm
+end
+
+function Base.delete!(bm::BackedMetadata, key::String)
+    delete!(bm.data, key)
+    p = joinpath(bm.backing.path, "metadata", key)
+    isdir(p) && rm(p; recursive=true, force=true)
+    bm
+end
+
+Base.getindex(bm::BackedMetadata, key::String) = bm.data[key]
+Base.iterate(bm::BackedMetadata)               = iterate(bm.data)
+Base.iterate(bm::BackedMetadata, state)        = iterate(bm.data, state)
+Base.length(bm::BackedMetadata)                = length(bm.data)
+
+# ── Dataset ───────────────────────────────────────────────────────────────────
+
 mutable struct SpatialDataset
     elements      :: OrderedDict{String, Any}
     coord_systems :: OrderedDict{String, CoordinateSystem}
     transforms    :: Vector{AbstractTransformation}
     backing       :: BackingStore
     relations     :: Dict{String, Any}     # name → SpatialRelation
-    metadata      :: Dict{String, Any}
+    metadata      :: BackedMetadata
 end
 
-function SpatialDataset(; path=nothing, spill_threshold=64_000_000, metadata=Dict{String,Any}())
+function SpatialDataset(; path=nothing, metadata=Dict{String,Any}())
+    bs = BackingStore(; path)
     ds = SpatialDataset(
         OrderedDict{String,Any}(),
         OrderedDict{String,CoordinateSystem}(),
         AbstractTransformation[],
-        BackingStore(; path, spill_threshold),
+        bs,
         Dict{String,Any}(),
-        Dict{String,Any}(metadata),
+        BackedMetadata(Dict{String,Any}(metadata), bs),
     )
     finalizer(ds) do d
         d.backing.owned && _cleanup!(d.backing)
@@ -162,11 +199,13 @@ end
 
 function Base.push!(ds::SpatialDataset, cs::CoordinateSystem)
     ds.coord_systems[cs.name] = cs
+    _write_spatialomics_meta(ds, ds.backing.path)   # defined in zarr_io.jl
     ds
 end
 
 function Base.push!(ds::SpatialDataset, t::AbstractTransformation)
     push!(ds.transforms, t)
+    _write_spatialomics_meta(ds, ds.backing.path)   # defined in zarr_io.jl
     ds
 end
 
@@ -202,7 +241,7 @@ end
 # ── Element attachment placeholder (implemented in elements.jl) ───────────────
 
 function Base.setindex!(ds::SpatialDataset, rel::SpatialRelation, name::String)
-    _spill_relation!(ds.backing, name, rel)
+    _write_zarr_relation(ds.backing.path, name, rel)
     ds.relations[name] = rel
     ds
 end
@@ -214,7 +253,7 @@ function Base.setindex!(ds::SpatialDataset, el, name::String)
               "Use `ds[\"$name\"] = copy(el)` to attach a detached copy. " *
               "Note: relations involving this element in the original dataset will not transfer.")
     end
-    _spill_element!(ds.backing, name, el)
+    _write_zarr(ds.backing.path, name, el)
     _set_backref!(el, ds, name)
     ds.elements[name] = el
     ds
