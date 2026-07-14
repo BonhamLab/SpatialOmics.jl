@@ -47,7 +47,7 @@ export
     geometry, roi, roi!,
     # Images + Labels
     SpatialImage, SpatialLabels,
-    data, nchannels, channel_names, build_pyramid!, images, labels,
+    data, nchannels, channel_names, build_pyramid!, ensure_pyramid!, images, labels,
     SpatialImageColorView, channel, scaleminmax, colorview, Gray, RGB,
     # Relations
     RelationKind, Membership, Expression,

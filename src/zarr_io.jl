@@ -208,6 +208,40 @@ function _transform_from_dict(d)
     end
 end
 
+"""
+    ensure_pyramid!(img, n_levels=3) → img
+
+Ensure `img` has a multi-resolution pyramid, computing and saving it on first call.
+
+If `img.pyramid` is already populated, returns immediately. If the image is
+zarr-backed (`img.data isa Zarr.ZArray`), the pyramid is computed with
+`build_pyramid!`, written as `level1`, `level2`, … zarr arrays next to `data`
+on disk, then reopened as lazy disk arrays so they persist across sessions.
+Non-zarr-backed images (in-memory arrays) are built in-memory only.
+
+Called automatically by `image!(ax, img)` on first plot.
+
+# See also
+[`build_pyramid!`](@ref)
+"""
+function ensure_pyramid!(img::SpatialImage{T, N}, n_levels::Int=3) where {T, N}
+    isempty(img.pyramid) || return img
+    if !(img.data isa Zarr.ZArray && img.data.storage isa Zarr.DirectoryStore)
+        build_pyramid!(img, n_levels)
+        return img
+    end
+    grp_path = dirname(img.data.storage.folder)
+    sdims    = _spatial_dims(img.axes)
+    @info "Building $(n_levels)-level pyramid for $(basename(grp_path))…"
+    current = Array{T}(img.data)
+    for i in 1:n_levels
+        current = T.(restrict(current, sdims))
+        _write_zarr_array(grp_path, "level$i", current)
+        push!(img.pyramid, zopen(joinpath(grp_path, "level$i"), "r"; zarr_format=3))
+    end
+    img
+end
+
 # ── Write SpatialImage ─────────────────────────────────────────────────────────
 
 function _write_zarr(root::String, name::String, img::SpatialImage{T}) where T

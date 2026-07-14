@@ -110,6 +110,7 @@ end
 
 function Makie.image!(ax::Makie.Axis, img::SpatialImage; color=nothing, kw...)
     _register_cs!(ax, img.coord_system)
+    ensure_pyramid!(img)   # compute+save on first plot; no-op if already populated
     v = color === nothing ? colorview(Gray, img) : _pseudocolor_view(img, color)
     Makie.image!(ax, v; kw...)
 end
