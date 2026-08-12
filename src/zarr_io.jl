@@ -201,7 +201,7 @@ _transform_to_dict(::AbstractTransformation) =
 function _transform_from_dict(d)
     if d["type"] == "affine"
         rows = d["matrix"]
-        mat  = SMatrix{3,3,Float64}(Float64(rows[j][i]) for i in 1:3, j in 1:3)
+        mat  = SMatrix{3,3,Float64}(Float64(rows[i][j]) for i in 1:3, j in 1:3)
         Affine(mat, d["src"], d["dst"])
     else
         Identity(d["src"], d["dst"])

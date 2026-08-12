@@ -123,15 +123,39 @@ function SpatialShapes(roi::SpatialROI; instance_id::Int32=Int32(1))
 end
 
 """
-    select(ax, ds) → SpatialROI
+    roi(ax; coord_system="", snap_px=10, priority=2) → Observable{Union{Nothing,SpatialROI}}
 
-Interactively draw a polygon ROI on Makie axis `ax` and return the result as a
-`SpatialROI`. Requires a Makie backend to be loaded.
+Interactively draw a polygon ROI on Makie axis `ax`. Left-click adds vertices;
+click within `snap_px` screen pixels of the first vertex (or press Enter) to
+close; Escape cancels. The `coord_system` is inferred from any SpatialOmics
+element already plotted on `ax` if not supplied explicitly.
 
-This function is a stub; the implementation is provided by the Makie extension
-when a backend is loaded.
+Requires a Makie backend to be loaded. Replaces the old `select` verb (which
+clashed with `DataFrames.select`).
+
+# See also
+[`roi!`](@ref), [`SpatialROI`](@ref), [`SpatialShapes`](@ref)
 """
-function select end
+function roi end
+
+"""
+    roi!(ds, ax; name, force=false, coord_system="", snap_px=10, priority=2) → Observable
+
+One-shot version of [`roi`](@ref): draws a polygon and saves it to `ds[name]`
+as a `SpatialShapes` element when the polygon closes. Returns the same
+`Observable{Union{Nothing,SpatialROI}}` as `roi` so the caller can react.
+
+Errors if `ds[name]` already exists; pass `force=true` to overwrite.
+
+```julia
+roi!(ds, ax; name="cortex")              # draw, save automatically
+roi!(ds, ax; name="cortex", force=true)  # redraw an existing ROI
+shapes(ds, "cortex")                     # retrieve the saved polygon
+```
+
+Requires a Makie backend to be loaded.
+"""
+function roi! end
 
 # ── SpatialElementView ────────────────────────────────────────────────────────
 
@@ -196,6 +220,14 @@ function Base.view(el::Union{SpatialPoints, SpatialShapes}, roi::_ROI;
         "Coordinate system mismatch: element is \"$cs_el\", ROI is \"$cs_roi\". " *
         "Apply a transform to the element first.")
     SpatialElementView(el, roi, overlap)
+end
+
+function Base.view(el::Union{SpatialPoints, SpatialShapes, SpatialDataset},
+                   shp::SpatialShapes; kw...)
+    length(shp.geometries) == 1 ||
+        error("view(el, shp::SpatialShapes) requires exactly one geometry; got $(length(shp.geometries)). " *
+              "Index the shape first: shp[i]")
+    Base.view(el, SpatialROI(shp.geometries[1]; coord_system=shp.coord_system); kw...)
 end
 
 function Base.view(ds::SpatialDataset, roi::_ROI)

@@ -388,6 +388,12 @@ function Base.getindex(pts::SpatialPoints{T}, mask::AbstractVector{Bool}) where 
                      pts.coord_system, nothing)
 end
 
+function Base.getindex(pts::SpatialPoints{T}, gene::String) where T
+    idx = findfirst(==(gene), pts.feature_codebook)
+    mask = idx === nothing ? falses(length(pts.coords)) : pts.feature_id .== Int32(idx)
+    pts[mask]
+end
+
 # ── top_features ──────────────────────────────────────────────────────────────
 
 """
