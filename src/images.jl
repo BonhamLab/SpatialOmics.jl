@@ -403,6 +403,31 @@ function Base.view(img::SpatialImage, ext::SpatialExtent)
                  pyramid=new_pyr, display_transform=img.display_transform)
 end
 
+function Base.view(lbl::SpatialLabels, ext::SpatialExtent)
+    N  = ndims(lbl.data)
+    xi = something(findfirst(==(:x), lbl.axes), 1)
+    yi = something(findfirst(==(:y), lbl.axes), 2)
+    lo = _global_to_pixel(lbl.pixel_to_cs, SVector(ext.xmin, ext.ymin))
+    hi = _global_to_pixel(lbl.pixel_to_cs, SVector(ext.xmax, ext.ymax))
+    xi_lo, xi_hi = _px_range(lo[1], hi[1], size(lbl.data, xi))
+    yi_lo, yi_hi = _px_range(lo[2], hi[2], size(lbl.data, yi))
+    slices = ntuple(
+        dimension -> dimension == xi ? (xi_lo:xi_hi) :
+                     dimension == yi ? (yi_lo:yi_hi) : Colon(),
+        N,
+    )
+    pixel_to_cs = _shift_pixel_origin(
+        lbl.pixel_to_cs, Float64(xi_lo - 1), Float64(yi_lo - 1),
+    )
+    SpatialLabels(
+        view(lbl.data, slices...);
+        axes=lbl.axes,
+        instance_map=copy(lbl.instance_map),
+        coord_system=lbl.coord_system,
+        pixel_to_cs,
+    )
+end
+
 _px_range(lo, hi, n) = (clamp(floor(Int, min(lo, hi)) + 1, 1, n),
                          clamp(ceil(Int,  max(lo, hi)),     1, n))
 

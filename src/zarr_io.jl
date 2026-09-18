@@ -86,6 +86,12 @@ function _write_zarr(root::String, name::String, pts::SpatialPoints{T}) where T
     open(joinpath(grp, "feature_codebook.json"), "w") do io
         JSON.print(io, pts.feature_codebook)
     end
+    if pts.origin_id !== nothing
+        _write_zarr_array(grp, "origin_id", pts.origin_id)
+        open(joinpath(grp, "origin_codebook.json"), "w") do io
+            JSON.print(io, pts.origin_codebook)
+        end
+    end
     if pts.feature_columns !== nothing
         _write_named_tuple(joinpath(grp, "feature_columns"), pts.feature_columns)
     end
@@ -102,6 +108,12 @@ function _write_zarr(root::String, name::String, shp::SpatialShapes)
             "coord_system" => shp.coord_system)))
 
     _write_zarr_array(grp, "instance_id", shp.instance_id)
+    if shp.origin_id !== nothing
+        _write_zarr_array(grp, "origin_id", shp.origin_id)
+        open(joinpath(grp, "origin_codebook.json"), "w") do io
+            JSON.print(io, shp.origin_codebook)
+        end
+    end
 
     # Ragged CSR layout: polygons → rings → points
     # poly_offsets[i] = 0-based index of first ring for polygon i (Julia 1-based)
@@ -162,7 +174,17 @@ function _read_points_zarr(grp::String) :: SpatialPoints{Float32}
     columns_path = joinpath(grp, "feature_columns")
     feature_columns = isdir(columns_path) ? _read_named_tuple(columns_path) : nothing
 
-    SpatialPoints{Float32}(coords, feature_id, codebook, instance_id, feature_columns, cs, nothing)
+    origin_path = joinpath(grp, "origin_id")
+    origin_id = isdir(origin_path) ?
+        Vector{Int32}(zopen(origin_path, "r"; zarr_format=3)[:]) : nothing
+    origin_codebook_path = joinpath(grp, "origin_codebook.json")
+    origin_codebook = isfile(origin_codebook_path) ?
+        convert(Vector{String}, JSON.parse(read(origin_codebook_path, String))) : String[]
+
+    SpatialPoints{Float32}(
+        coords, feature_id, codebook, instance_id, feature_columns,
+        origin_id, origin_codebook, cs, nothing,
+    )
 end
 
 # ── Read SpatialShapes ─────────────────────────────────────────────────────────
@@ -190,7 +212,14 @@ function _read_shapes_zarr(grp::String) :: SpatialShapes
     meta = JSON.parse(read(joinpath(grp, "zarr.json"), String))
     cs   = meta["attributes"]["_spatialdata_attrs"]["coord_system"]
 
-    SpatialShapes(geometries; instance_id, coord_system=cs)
+    origin_path = joinpath(grp, "origin_id")
+    origin_id = isdir(origin_path) ?
+        Vector{Int32}(zopen(origin_path, "r"; zarr_format=3)[:]) : nothing
+    origin_codebook_path = joinpath(grp, "origin_codebook.json")
+    origin_codebook = isfile(origin_codebook_path) ?
+        convert(Vector{String}, JSON.parse(read(origin_codebook_path, String))) : String[]
+
+    SpatialShapes(geometries; instance_id, origin_id, origin_codebook, coord_system=cs)
 end
 
 # ── Transform serialization helpers ───────────────────────────────────────────
@@ -500,7 +529,16 @@ function _write_spatialomics_meta(ds::SpatialDataset, path::String)
                      "axes"  => collect(string.(cs.axes)),
                      "units" => collect(cs.units))
                 for cs in values(ds.coord_systems)],
-            "transforms" => [_transform_to_dict(t) for t in ds.transforms]))
+            "transforms" => [_transform_to_dict(t) for t in ds.transforms],
+            "sources" => [
+                Dict(
+                    "name" => acquisition.name,
+                    "region_element" => acquisition.region_element,
+                    "region_id" => acquisition.region_id,
+                )
+                for acquisition in values(ds.sources)
+            ],
+        ))
     end
 end
 
@@ -762,6 +800,7 @@ function discard!(ds::SpatialDataset, name::Union{Nothing,String}=nothing)
             elseif kind === :dataset
                 ds.coord_systems = copy(stored.coord_systems)
                 ds.transforms = copy(stored.transforms)
+                ds.sources = copy(stored.sources)
             end
         end
     finally
@@ -806,6 +845,16 @@ function Base.read(::SpatialDataZarr, path::String) :: SpatialDataset
         end
         for t in get(meta, "transforms", [])
             push!(ds.transforms, _transform_from_dict(t))
+        end
+        for acquisition in get(meta, "sources", [])
+            region_element = get(acquisition, "region_element", nothing)
+            region_id = get(acquisition, "region_id", nothing)
+            registered = AcquisitionSource(
+                acquisition["name"];
+                region=region_element,
+                instance_id=region_id,
+            )
+            ds.sources[registered.name] = registered
         end
     end
 
@@ -1163,9 +1212,10 @@ ds = read(CosMx(), "/path/to/cosmx_export/")
 ds = read(CosMx(morphology_dir="/path/to/Morphology2D"), "/path/to/cosmx_export/")
 ```
 
-Each field-of-view (FOV) is registered as a separate `CoordinateSystem`;
-use `coord_systems(ds)` and `transform(ds, fov_cs, "global")` to navigate
-between spaces.
+Each field of view is registered both as a `CoordinateSystem` such as
+`"fov_1_px"` and as an [`AcquisitionSource`](@ref) linked to its footprint.
+Use `view(ds, "fov_1_px")` for provenance-aware selection and
+`transform(ds, "fov_1_px", "global_px")` to navigate between spaces.
 
 # See also
 [`SpatialDataZarr`](@ref)
@@ -1412,6 +1462,9 @@ function Base.read(fmt::CosMx, path::String;
     codebook   = sort(unique(all_feat))
     feat_to_id = Dict(g => Int32(i) for (i, g) in enumerate(codebook))
     feat_ids   = Int32[feat_to_id[f] for f in all_feat]
+    source_names = ["fov_$(f)_px" for f in fov_ids]
+    source_to_id = Dict(f => Int32(i) for (i, f) in enumerate(fov_ids))
+    transcript_origin_ids = Int32[source_to_id[Int(f)] for f in ann_fov]
 
     # ── Cell polygons ─────────────────────────────────────────────────────────
     poly_tbl = _gz_csv(_cosmx_find(run_dir, "-polygons.csv.gz"))
@@ -1442,7 +1495,14 @@ function Base.read(fmt::CosMx, path::String;
         push!(inst, Int32(i))
     end
 
-    cells = SpatialShapes(polys; instance_id=inst, coord_system="global_px")
+    cell_origin_ids = Int32[source_to_id[first(key)] for key in cell_keys]
+    cells = SpatialShapes(
+        polys;
+        instance_id=inst,
+        origin_id=cell_origin_ids,
+        origin_codebook=source_names,
+        coord_system="global_px",
+    )
 
     # Remap transcript instance_ids now that global_id map is available
     all_inst = Int32[ann_cell_id[i] == Int32(0) ? Int32(0) :
@@ -1454,6 +1514,9 @@ function Base.read(fmt::CosMx, path::String;
         feature_id       = feat_ids,
         feature_codebook = codebook,
         instance_id      = all_inst,
+        features         = (z=ann_z, CellComp=ann_comp),
+        origin_id        = transcript_origin_ids,
+        origin_codebook  = source_names,
         coord_system     = "global_px")
 
     # ── Assemble dataset ──────────────────────────────────────────────────────
@@ -1483,12 +1546,18 @@ function Base.read(fmt::CosMx, path::String;
                       Point2f(ox,         oy),
                       Point2f(ox,         oy - fov_h)])
          end for f in fov_ids];
-        instance_id = Int32.(fov_ids), coord_system = "global_px")
+        instance_id = Int32.(fov_ids),
+        origin_id = Int32.(eachindex(fov_ids)),
+        origin_codebook = source_names,
+        coord_system = "global_px")
 
-    ds.metadata["transcripts_annotations"] = (
-        fov      = ann_fov,
-        z        = ann_z,
-        CellComp = ann_comp)
+    for f in fov_ids
+        push!(ds, AcquisitionSource(
+            "fov_$(f)_px";
+            region="fovs",
+            instance_id=f,
+        ))
+    end
 
     if fmt.morphology_dir !== nothing
         morph2d = _find_morphology2d(fmt.morphology_dir)

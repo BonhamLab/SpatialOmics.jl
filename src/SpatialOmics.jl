@@ -31,14 +31,14 @@ export
     # Use SpatialOmics.translation(...) etc. when constructing pixel_to_cs transforms.
     apply, apply!, resolve,
     # Dataset
-    BackingStore, SpatialDataset,
-    elements, coord_systems, transform,
+    BackingStore, SpatialDataset, AcquisitionSource,
+    elements, coord_systems, transform, sources, source,
     with_dataset, keep!, save!, discard!, edit!, touch!, isdirty, dirty,
     # Elements
     SpatialPoints, SpatialShapes, SpatialShape,
     Polygon, Point2f,
     points, shapes,
-    coords, features, feature_ids, coord_system,
+    coords, features, feature_ids, origins, origin_ids, coord_system,
     geometries, instance_id, instance_ids,
     subsample, top_features, count_per_instance,
     # Views

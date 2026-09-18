@@ -16,6 +16,13 @@ SpatialDatasetView
 SpatialElementView
 ```
 
+Views accept geometric regions or registered acquisition sources:
+
+```julia
+view(ds, roi)          # geometric membership
+view(ds, "fov_1_px") # acquisition provenance
+```
+
 ## Accessors
 
 ```@docs

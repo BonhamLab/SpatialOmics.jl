@@ -24,6 +24,24 @@ and typed, without prejudicing any one modality as primary.
 All four types belong to one named coordinate system. A dataset can hold any
 number of elements of each type, keyed by name.
 
+## Acquisition provenance
+
+An [`AcquisitionSource`](@ref) records the instrument-defined unit that
+produced an observation, such as a CosMx field of view. Sources may be linked
+to footprint polygons, but membership is stored independently as compact
+origin IDs on points and shapes. This distinction prevents an observation in
+the overlap between two FOV footprints from being silently assigned to both.
+
+```julia
+sources(ds)                    # registered source names
+view(ds, "fov_2_px")          # observations acquired in FOV 2
+view(ds, user_drawn_polygon)   # all observations inside the polygon
+```
+
+Use [`origins`](@ref) and [`origin_ids`](@ref) for bulk provenance, or
+`source(element, i)` for one observation. See [Acquisition sources and
+geometric regions](@ref) for view behavior and compatibility fallback rules.
+
 ## Typed accessors
 
 Elements are stored internally in a flat `OrderedDict`. The typed accessor

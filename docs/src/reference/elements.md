@@ -14,6 +14,8 @@ SpatialPoints
 coords
 features
 feature_ids
+origins
+origin_ids
 coord_system
 instance_id
 instance_ids

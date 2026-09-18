@@ -94,6 +94,37 @@ end
 # ── Dataset ───────────────────────────────────────────────────────────────────
 
 """
+    AcquisitionSource(name; region=nothing, instance_id=nothing)
+
+A named acquisition unit such as a field of view, imaging tile, or tissue
+section. `region` and `instance_id` may identify its footprint in a
+`SpatialShapes` element. Observations record the source name independently of
+their coordinates, so source selection remains distinct from geometric ROI
+selection in overlapping acquisitions.
+
+# See also
+[`sources`](@ref), [`source`](@ref), [`SpatialDatasetView`](@ref)
+"""
+struct AcquisitionSource
+    name           :: String
+    region_element :: Union{Nothing,String}
+    region_id      :: Union{Nothing,Int32}
+end
+
+function AcquisitionSource(name::AbstractString;
+                           region::Union{Nothing,AbstractString}=nothing,
+                           instance_id::Union{Nothing,Integer}=nothing)
+    (region === nothing) == (instance_id === nothing) || throw(ArgumentError(
+        "region and instance_id must either both be supplied or both be omitted",
+    ))
+    AcquisitionSource(
+        String(name),
+        region === nothing ? nothing : String(region),
+        instance_id === nothing ? nothing : Int32(instance_id),
+    )
+end
+
+"""
     SpatialDataset(; path=nothing, metadata=Dict())
 
 Root container for a spatial omics experiment.
@@ -163,6 +194,7 @@ mutable struct SpatialDataset
     elements      :: OrderedDict{String, Any}
     coord_systems :: OrderedDict{String, CoordinateSystem}
     transforms    :: Vector{AbstractTransformation}
+    sources       :: OrderedDict{String, AcquisitionSource}
     backing       :: BackingStore
     relations     :: Dict{String, Any}     # name → SpatialRelation
     metadata      :: BackedMetadata
@@ -174,6 +206,7 @@ function SpatialDataset(; path=nothing, metadata=Dict{String,Any}())
         OrderedDict{String,Any}(),
         OrderedDict{String,CoordinateSystem}(),
         AbstractTransformation[],
+        OrderedDict{String,AcquisitionSource}(),
         bs,
         Dict{String,Any}(),
         BackedMetadata(Dict{String,Any}(metadata), bs),
@@ -334,6 +367,12 @@ function Base.push!(ds::SpatialDataset, t::AbstractTransformation)
     ds
 end
 
+function Base.push!(ds::SpatialDataset, acquisition::AcquisitionSource)
+    ds.sources[acquisition.name] = acquisition
+    _mark_dirty!(ds.backing, (:dataset, "coordinate_systems"))
+    ds
+end
+
 """
     elements(ds) → OrderedDict{String, Any}
 
@@ -352,6 +391,27 @@ elements(ds::SpatialDataset)      = copy(ds.elements)
 Return the names of all coordinate systems registered in `ds`.
 """
 coord_systems(ds::SpatialDataset) = collect(keys(ds.coord_systems))
+
+"""
+    sources(ds) → Vector{String}
+
+Return the registered acquisition-source names in `ds`.
+"""
+sources(ds::SpatialDataset) = collect(keys(ds.sources))
+
+"""
+    source(ds, name) → AcquisitionSource
+
+Return the named acquisition source. Source names can also be passed directly
+to `view(ds, name)`.
+"""
+function source(ds::SpatialDataset, name::AbstractString)
+    key = String(name)
+    haskey(ds.sources, key) || throw(ArgumentError(
+        "unknown acquisition source $(repr(name)); available: $(join(keys(ds.sources), ", "))",
+    ))
+    ds.sources[key]
+end
 
 """
     transform(ds, src, dst) → AbstractTransformation

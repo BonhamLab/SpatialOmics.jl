@@ -189,9 +189,10 @@ end
 
 Lazy view across all elements of a `SpatialDataset`, scoped to a spatial region.
 
-Produced by `view(ds, extent)` or `view(ds, roi)`. Accessing an element via
-the typed accessors (`points`, `shapes`, `images`, `labels`) returns a
-`SpatialElementView` for that element — still lazy, no data copied.
+Produced by `view(ds, extent)`, `view(ds, roi)`, or `view(ds, source_name)`.
+Geometric regions select by location. Acquisition-source views select points
+and shapes by recorded origin, so overlapping source footprints do not change
+membership.
 
 ```julia
 roi = view(ds, SpatialExtent(1000.0, 2000.0, 500.0, 1500.0))
@@ -204,7 +205,7 @@ collect(tx)                        # materialise into a concrete SpatialPoints
 """
 struct SpatialDatasetView
     parent :: SpatialDataset
-    roi    :: Union{SpatialExtent, SpatialROI}
+    roi    :: Union{SpatialExtent, SpatialROI, AcquisitionSource}
 end
 
 # ── view constructors ─────────────────────────────────────────────────────────
@@ -222,6 +223,19 @@ function Base.view(el::Union{SpatialPoints, SpatialShapes}, roi::_ROI;
     SpatialElementView(el, roi, overlap)
 end
 
+function Base.view(el::Union{SpatialPoints,SpatialShapes},
+                   acquisition::AcquisitionSource;
+                   overlap::Symbol=:any)
+    overlap in (:any, :full) || throw(ArgumentError(
+        "overlap must be :any or :full, got :$overlap",
+    ))
+    _has_origins(el) || throw(ArgumentError(
+        "element has no acquisition provenance; select the source through its parent dataset " *
+        "to permit an explicit, warned geometric fallback",
+    ))
+    SpatialElementView(el, acquisition, overlap)
+end
+
 function Base.view(el::Union{SpatialPoints, SpatialShapes, SpatialDataset},
                    shp::SpatialShapes; kw...)
     length(shp.geometries) == 1 ||
@@ -234,22 +248,69 @@ function Base.view(ds::SpatialDataset, roi::_ROI)
     SpatialDatasetView(ds, roi)
 end
 
+Base.view(ds::SpatialDataset, acquisition::AcquisitionSource) =
+    SpatialDatasetView(ds, acquisition)
+
+"""
+    view(ds, source_name)
+
+Create a lazy acquisition-source view. Points and shapes with origin metadata
+are selected by provenance, not by footprint geometry. This differs from
+`view(ds, roi)`, which deliberately selects every observation geometrically
+inside a user-defined region, including across acquisition boundaries.
+"""
+Base.view(ds::SpatialDataset, source_name::AbstractString) =
+    view(ds, source(ds, source_name))
+
+function _source_roi(ds::SpatialDataset, acquisition::AcquisitionSource)
+    acquisition.region_element === nothing && throw(ArgumentError(
+        "acquisition source $(repr(acquisition.name)) has no registered spatial footprint",
+    ))
+    region = shapes(ds, acquisition.region_element)
+    index = findfirst(==(acquisition.region_id), region.instance_id)
+    index === nothing && throw(ArgumentError(
+        "source footprint $(repr(acquisition.region_element)) has no instance_id " *
+        "$(acquisition.region_id)",
+    ))
+    SpatialROI(region.geometries[index]; coord_system=region.coord_system)
+end
+
+_has_origins(el::Union{SpatialPoints,SpatialShapes}) = el.origin_id !== nothing
+
+function _source_view(ds::SpatialDataset,
+                      el::Union{SpatialPoints,SpatialShapes},
+                      acquisition::AcquisitionSource)
+    _has_origins(el) && return view(el, acquisition)
+    element_name = _element_name(el)
+    @warn "Element has no acquisition provenance; using source-footprint geometry" element=element_name source=acquisition.name _id=(:spatialomics_source_fallback, element_name, acquisition.name) maxlog=1
+    view(el, _source_roi(ds, acquisition))
+end
+
+_dataset_view_element(::SpatialDataset,
+                      el::Union{SpatialPoints,SpatialShapes}, roi::_ROI) = view(el, roi)
+_dataset_view_element(ds::SpatialDataset,
+                      el::Union{SpatialPoints,SpatialShapes},
+                      acquisition::AcquisitionSource) = _source_view(ds, el, acquisition)
+_dataset_view_element(ds::SpatialDataset, el, selector) =
+    view(el, _view_extent(ds, selector))
+
 # ── SpatialDatasetView element access ─────────────────────────────────────────
 
-Base.getindex(v::SpatialDatasetView, name::String) = view(v.parent[name], v.roi)
+Base.getindex(v::SpatialDatasetView, name::String) =
+    _dataset_view_element(v.parent, v.parent[name], v.roi)
 Base.haskey(v::SpatialDatasetView, name::String)   = haskey(v.parent, name)
 Base.keys(v::SpatialDatasetView)                   = keys(v.parent)
 
 function points(v::SpatialDatasetView, name::String)
     el = v.parent.elements[name]
     el isa SpatialPoints || error("Element \"$name\" is not SpatialPoints (got $(typeof(el)))")
-    view(el, v.roi)
+    _dataset_view_element(v.parent, el, v.roi)
 end
 
 function shapes(v::SpatialDatasetView, name::String)
     el = v.parent.elements[name]
     el isa SpatialShapes || error("Element \"$name\" is not SpatialShapes (got $(typeof(el)))")
-    view(el, v.roi)
+    _dataset_view_element(v.parent, el, v.roi)
 end
 
 # ── Mask computation ──────────────────────────────────────────────────────────
@@ -267,6 +328,19 @@ function _mask(pts::SpatialPoints, roi::SpatialROI, ::Symbol=:any)
     end
     mask
 end
+
+function _origin_mask(el::Union{SpatialPoints,SpatialShapes},
+                      acquisition::AcquisitionSource)
+    index = findfirst(==(acquisition.name), el.origin_codebook)
+    index === nothing && return falses(length(el))
+    el.origin_id .== Int32(index)
+end
+
+_mask(pts::SpatialPoints, acquisition::AcquisitionSource, ::Symbol=:any) =
+    _origin_mask(pts, acquisition)
+
+_mask(shp::SpatialShapes, acquisition::AcquisitionSource, ::Symbol=:any) =
+    _origin_mask(shp, acquisition)
 
 # Shapes × SpatialExtent: per-geometry extent check, exact for rectangular ROIs
 function _mask(shp::SpatialShapes, ext::SpatialExtent, overlap::Symbol=:any)
@@ -301,16 +375,22 @@ function Base.collect(v::SpatialElementView{<:SpatialPoints})
     mask = _mask(v.parent, v.roi, v.overlap)
     p = v.parent
     T = eltype(eltype(p.coords))
-    SpatialPoints{T}(p.coords[mask], p.feature_id[mask], copy(p.feature_codebook),
-                     p.instance_id[mask], _subset_feature_columns(p.feature_columns, mask),
-                     p.coord_system, nothing)
+    SpatialPoints{T}(
+        p.coords[mask], p.feature_id[mask], copy(p.feature_codebook),
+        p.instance_id[mask], _subset_feature_columns(p.feature_columns, mask),
+        _subset_origin_ids(p.origin_id, mask), copy(p.origin_codebook),
+        p.coord_system, nothing,
+    )
 end
 
 function Base.collect(v::SpatialElementView{<:SpatialShapes})
     mask = _mask(v.parent, v.roi, v.overlap)
     s = v.parent
     SpatialShapes(s.geometries[mask];
-                  instance_id=s.instance_id[mask], coord_system=s.coord_system)
+                  instance_id=s.instance_id[mask],
+                  origin_id=_subset_origin_ids(s.origin_id, mask),
+                  origin_codebook=copy(s.origin_codebook),
+                  coord_system=s.coord_system)
 end
 
 # ── length — count without allocating a copy ──────────────────────────────────
@@ -320,7 +400,10 @@ Base.length(v::SpatialElementView) = count(_mask(v.parent, v.roi, v.overlap))
 # ── passthrough accessors for SpatialElementView ──────────────────────────────
 
 coord_system(v::SpatialElementView) = coord_system(v.parent)
-coord_system(v::SpatialDatasetView) = coord_system(v.roi)
+coord_system(v::SpatialDatasetView) = _view_coord_system(v.parent, v.roi)
+_view_coord_system(::SpatialDataset, roi::_ROI) = coord_system(roi)
+_view_coord_system(ds::SpatialDataset, acquisition::AcquisitionSource) =
+    coord_system(_source_roi(ds, acquisition))
 
 features(v::SpatialElementView{<:SpatialPoints})                = v.parent.feature_codebook
 features(v::SpatialElementView{<:SpatialPoints}, col::Symbol)   =
@@ -342,6 +425,17 @@ end
 
 feature_ids(v::SpatialElementView{<:SpatialPoints}) =
     v.parent.feature_id[_mask(v.parent, v.roi, v.overlap)]
+
+origins(v::SpatialElementView{<:Union{SpatialPoints,SpatialShapes}}) =
+    v.parent.origin_codebook
+
+origin_ids(v::SpatialElementView{<:Union{SpatialPoints,SpatialShapes}}) =
+    _subset_origin_ids(v.parent.origin_id, _mask(v.parent, v.roi, v.overlap))
+
+function source(v::SpatialElementView{<:Union{SpatialPoints,SpatialShapes}}, i::Integer)
+    ids = origin_ids(v)
+    ids === nothing ? nothing : origins(v)[ids[i]]
+end
 
 instance_id(v::SpatialElementView{<:SpatialShapes}) =
     v.parent.instance_id[_mask(v.parent, v.roi, v.overlap)]
@@ -365,14 +459,19 @@ end
 function images(v::SpatialDatasetView, name::String)
     el = v.parent.elements[name]
     el isa SpatialImage || error("Element \"$name\" is not SpatialImage (got $(typeof(el)))")
-    ext = v.roi isa SpatialExtent ? v.roi : v.roi.extent
-    Base.view(el, ext)
+    Base.view(el, _view_extent(v.parent, v.roi))
 end
+
+
+_view_extent(::SpatialDataset, ext::SpatialExtent) = ext
+_view_extent(::SpatialDataset, roi::SpatialROI) = roi.extent
+_view_extent(ds::SpatialDataset, acquisition::AcquisitionSource) =
+    _source_roi(ds, acquisition).extent
 
 function labels(v::SpatialDatasetView, name::String)
     el = v.parent.elements[name]
     el isa SpatialLabels || error("Element \"$name\" is not SpatialLabels (got $(typeof(el)))")
-    el    # labels are rasters — no spatial element view; return as-is
+    Base.view(el, _view_extent(v.parent, v.roi))
 end
 
 function tables(v::SpatialDatasetView, name::String)

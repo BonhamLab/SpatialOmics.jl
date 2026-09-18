@@ -1,6 +1,42 @@
 
 # ── SpatialPoints ─────────────────────────────────────────────────────────────
 
+function _origin_fields(n::Int, ::Nothing, ::Nothing, codebook)
+    isempty(codebook) || throw(ArgumentError("origin_codebook requires origin_id"))
+    nothing, String[]
+end
+
+function _origin_fields(n::Int, labels::AbstractVector, ::Nothing, codebook)
+    isempty(codebook) || throw(ArgumentError(
+        "origin_codebook cannot be combined with origins",
+    ))
+    length(labels) == n || throw(DimensionMismatch(
+        "origins has length $(length(labels)); expected $n",
+    ))
+    names = unique(String.(labels))
+    positions = Dict(name => Int32(i) for (i, name) in enumerate(names))
+    Int32[positions[String(label)] for label in labels], names
+end
+
+function _origin_fields(n::Int, ::Nothing, ids::AbstractVector{<:Integer}, codebook)
+    length(ids) == n || throw(DimensionMismatch(
+        "origin_id has length $(length(ids)); expected $n",
+    ))
+    names = String.(codebook)
+    encoded = Int32.(ids)
+    all(id -> 1 <= id <= length(names), encoded) || throw(ArgumentError(
+        "origin_id values must index origin_codebook",
+    ))
+    encoded, names
+end
+
+function _origin_fields(::Int, ::AbstractVector, ::AbstractVector, _)
+    throw(ArgumentError("origins and origin_id are alternative inputs"))
+end
+
+_subset_origin_ids(::Nothing, _) = nothing
+_subset_origin_ids(ids::Vector{Int32}, idx) = ids[idx]
+
 """
     SpatialPoints{T<:AbstractFloat}
 
@@ -13,14 +49,16 @@ for O(1) lookup by name via `coords(pts, feature)`.
 
 # Constructors
 
-    SpatialPoints(coords; feature_id, feature_codebook, instance_id, coord_system)
+    SpatialPoints(coords; feature_id, feature_codebook, instance_id, origins, coord_system)
 
-Bare coordinates constructor. `coords` is a `Vector{Point{2,T}}`.
+Bare coordinates constructor. `coords` is a `Vector{Point{2,T}}`. Pass source
+names with `origins`, or an encoded `origin_id` vector and `origin_codebook`,
+to retain acquisition provenance independently of position.
 
-    SpatialPoints(table; x=:x, y=:y, gene=nothing, coord_system="")
+    SpatialPoints(table; x=:x, y=:y, gene=nothing, origin=nothing, coord_system="")
 
 Tables.jl constructor. Reads x/y from columns named by `x` and `y`; optionally
-encodes a gene/label column via `gene`.
+encodes gene/label and acquisition-source columns via `gene` and `origin`.
 
 ```julia
 pts = SpatialPoints(df; x=:x_centroid, y=:y_centroid, gene=:target, coord_system="global")
@@ -30,7 +68,7 @@ coords(pts, "Epcam") # coordinates of all Epcam transcripts
 ```
 
 # See also
-[`coords`](@ref), [`features`](@ref), [`feature_ids`](@ref),
+[`coords`](@ref), [`features`](@ref), [`feature_ids`](@ref), [`origins`](@ref),
 [`instance_id`](@ref), [`subsample`](@ref), [`top_features`](@ref)
 """
 mutable struct SpatialPoints{T<:AbstractFloat}
@@ -39,6 +77,8 @@ mutable struct SpatialPoints{T<:AbstractFloat}
     feature_codebook :: Vector{String}
     instance_id      :: Vector{Int32}
     feature_columns  :: Union{Nothing, NamedTuple}
+    origin_id        :: Union{Nothing, Vector{Int32}}
+    origin_codebook  :: Vector{String}
     coord_system     :: String
     _attachment      :: Union{Nothing, Tuple{WeakRef, String}}
 end
@@ -49,14 +89,24 @@ function SpatialPoints(coords::Vector{Point{2,T}};
                        feature_codebook::Vector{String}=String[],
                        instance_id::Vector{Int32}=zeros(Int32, length(coords)),
                        features::Union{Nothing, NamedTuple}=nothing,
+                       origins::Union{Nothing,AbstractVector}=nothing,
+                       origin_id::Union{Nothing,AbstractVector{<:Integer}}=nothing,
+                       origin_codebook::AbstractVector{<:AbstractString}=String[],
                        coord_system::String="") where T<:AbstractFloat
-    SpatialPoints{T}(coords, feature_id, feature_codebook, instance_id, features, coord_system, nothing)
+    encoded_origins, origin_names = _origin_fields(
+        length(coords), origins, origin_id, origin_codebook,
+    )
+    SpatialPoints{T}(
+        coords, feature_id, feature_codebook, instance_id, features,
+        encoded_origins, origin_names, coord_system, nothing,
+    )
 end
 
 # Tables.jl constructor — columns must have x and y; gene and features are optional
 function SpatialPoints(table;
                        x::Symbol=:x, y::Symbol=:y,
                        gene::Union{Symbol,Nothing}=nothing,
+                       origin::Union{Symbol,Nothing}=nothing,
                        features::Union{Nothing, NamedTuple}=nothing,
                        coord_system::String="")
     cols = Tables.columntable(table)
@@ -73,7 +123,16 @@ function SpatialPoints(table;
         codebook = String[]
         feature_id = zeros(Int32, n)
     end
-    SpatialPoints{Float32}(coords, feature_id, codebook, zeros(Int32, n), features, coord_system, nothing)
+    origin_values = origin === nothing ? nothing : cols[origin]
+    SpatialPoints(
+        coords;
+        feature_id,
+        feature_codebook=codebook,
+        instance_id=zeros(Int32, n),
+        features,
+        origins=origin_values,
+        coord_system,
+    )
 end
 
 Base.length(pts::SpatialPoints) = length(pts.coords)
@@ -180,28 +239,67 @@ Implements the GeoInterface `GeometryCollectionTrait`, making it compatible
 with GeometryOps operations directly.
 
 # Constructors
-    SpatialShapes(geometries; instance_id, coord_system)
+    SpatialShapes(geometries; instance_id, origins, coord_system)
 
     SpatialShapes(ext::SpatialExtent)        # rectangular region
     SpatialShapes(roi::SpatialROI)           # polygon region
 
 # See also
-[`geometries`](@ref), [`instance_id`](@ref), [`SpatialROI`](@ref), [`SpatialPoints`](@ref)
+[`geometries`](@ref), [`instance_id`](@ref), [`origins`](@ref),
+[`SpatialROI`](@ref), [`SpatialPoints`](@ref)
 """
 mutable struct SpatialShapes{G<:AbstractGeometry}
     geometries   :: Vector{G}
     instance_id  :: Vector{Int32}
+    origin_id    :: Union{Nothing, Vector{Int32}}
+    origin_codebook :: Vector{String}
     coord_system :: String
     _attachment  :: Union{Nothing, Tuple{WeakRef, String}}
 end
 
 function SpatialShapes(geometries::Vector{G};
                        instance_id::Vector{Int32}=zeros(Int32, length(geometries)),
+                       origins::Union{Nothing,AbstractVector}=nothing,
+                       origin_id::Union{Nothing,AbstractVector{<:Integer}}=nothing,
+                       origin_codebook::AbstractVector{<:AbstractString}=String[],
                        coord_system::String="") where G<:AbstractGeometry
-    SpatialShapes{G}(geometries, instance_id, coord_system, nothing)
+    encoded_origins, origin_names = _origin_fields(
+        length(geometries), origins, origin_id, origin_codebook,
+    )
+    SpatialShapes{G}(
+        geometries, instance_id, encoded_origins, origin_names, coord_system, nothing,
+    )
 end
 
 Base.length(shp::SpatialShapes) = length(shp.geometries)
+
+"""
+    origins(el) → Vector{String}
+
+Return the acquisition-source codebook for a point or shape element.
+
+Source provenance is independent of geometry. Use `view(ds, source_name)` to
+select observations acquired by one source, including when source footprints
+overlap.
+"""
+origins(el::Union{SpatialPoints,SpatialShapes}) = el.origin_codebook
+
+"""
+    origin_ids(el) → Union{Nothing,Vector{Int32}}
+
+Return compact per-observation indices into [`origins`](@ref), or `nothing`
+when the element has no acquisition provenance.
+"""
+origin_ids(el::Union{SpatialPoints,SpatialShapes}) = el.origin_id
+
+"""
+    source(el, i) → Union{Nothing,String}
+
+Return the acquisition-source name for observation `i`, or `nothing` when the
+element has no acquisition provenance.
+"""
+source(el::Union{SpatialPoints,SpatialShapes}, i::Integer) =
+    el.origin_id === nothing ? nothing : el.origin_codebook[el.origin_id[i]]
 
 # ── Row type ──────────────────────────────────────────────────────────────────
 
@@ -210,9 +308,8 @@ Base.length(shp::SpatialShapes) = length(shp.geometries)
 
 Single-shape row accessor produced by indexing into a `SpatialShapes` collection.
 
-Carries the geometry, its `instance_id`, and the coordinate system name.
-Row-accessor and collection share the same field names (`geometry`, `instance_id`,
-`coord_system`) so code generalises across both.
+Carries the geometry, its `instance_id`, optional acquisition `origin`, and the
+coordinate system name.
 
 # See also
 [`SpatialShapes`](@ref), [`geometry`](@ref)
@@ -220,11 +317,12 @@ Row-accessor and collection share the same field names (`geometry`, `instance_id
 struct SpatialShape{G<:AbstractGeometry}
     geometry     :: G
     instance_id  :: Int32
+    origin       :: Union{Nothing,String}
     coord_system :: String
 end
 
 Base.getindex(shp::SpatialShapes{G}, i::Int) where G =
-    SpatialShape{G}(shp.geometries[i], shp.instance_id[i], shp.coord_system)
+    SpatialShape{G}(shp.geometries[i], shp.instance_id[i], source(shp, i), shp.coord_system)
 
 Base.iterate(shp::SpatialShapes, i=1) = i > length(shp) ? nothing : (shp[i], i+1)
 Base.eltype(::Type{SpatialShapes{G}}) where G = SpatialShape{G}
@@ -233,6 +331,8 @@ function Base.filter(pred, shp::SpatialShapes{G}) where G
     keep = [i for i in eachindex(shp.geometries) if pred(shp[i])]
     SpatialShapes(shp.geometries[keep];
                   instance_id  = shp.instance_id[keep],
+                  origin_id = _subset_origin_ids(shp.origin_id, keep),
+                  origin_codebook = copy(shp.origin_codebook),
                   coord_system = shp.coord_system)
 end
 
@@ -276,8 +376,12 @@ function apply(t::AbstractTransformation, pts::SpatialPoints{T}) where T
         v = apply(t, p)
         Point{2,T}(v[1], v[2])
     end
-    SpatialPoints{T}(new_coords, copy(pts.feature_id), copy(pts.feature_codebook),
-                     copy(pts.instance_id), pts.feature_columns, t.dst, nothing)
+    SpatialPoints{T}(
+        new_coords, copy(pts.feature_id), copy(pts.feature_codebook),
+        copy(pts.instance_id), pts.feature_columns,
+        isnothing(pts.origin_id) ? nothing : copy(pts.origin_id),
+        copy(pts.origin_codebook), t.dst, nothing,
+    )
 end
 
 """
@@ -307,7 +411,13 @@ end
 
 function apply(t::AbstractTransformation, shp::SpatialShapes{G}) where G
     new_geoms = G[_transform_geom(t, g) for g in shp.geometries]
-    SpatialShapes(new_geoms; instance_id=copy(shp.instance_id), coord_system=t.dst)
+    SpatialShapes(
+        new_geoms;
+        instance_id=copy(shp.instance_id),
+        origin_id=isnothing(shp.origin_id) ? nothing : copy(shp.origin_id),
+        origin_codebook=copy(shp.origin_codebook),
+        coord_system=t.dst,
+    )
 end
 
 function apply!(t::AbstractTransformation, shp::SpatialShapes{G}) where G
@@ -355,12 +465,20 @@ Base.setindex!(ds::SpatialDataset, el::Union{SpatialPoints,SpatialShapes}, name:
     _attach_element!(ds, el, name)
 
 function Base.copy(pts::SpatialPoints{T}) where T
-    SpatialPoints{T}(copy(pts.coords), copy(pts.feature_id), copy(pts.feature_codebook),
-                     copy(pts.instance_id), pts.feature_columns, pts.coord_system, nothing)
+    SpatialPoints{T}(
+        copy(pts.coords), copy(pts.feature_id), copy(pts.feature_codebook),
+        copy(pts.instance_id), pts.feature_columns,
+        isnothing(pts.origin_id) ? nothing : copy(pts.origin_id),
+        copy(pts.origin_codebook), pts.coord_system, nothing,
+    )
 end
 
 Base.copy(shp::SpatialShapes{G}) where G =
-    SpatialShapes{G}(copy(shp.geometries), copy(shp.instance_id), shp.coord_system, nothing)
+    SpatialShapes{G}(
+        copy(shp.geometries), copy(shp.instance_id),
+        isnothing(shp.origin_id) ? nothing : copy(shp.origin_id),
+        copy(shp.origin_codebook), shp.coord_system, nothing,
+    )
 
 """
     instance_ids(pts) → Vector{Int32}
@@ -388,15 +506,21 @@ The feature codebook is preserved; indices are rebuilt from the subset.
 function subsample(pts::SpatialPoints{T}, n::Int) where T
     n >= length(pts) && return pts
     idx = sort!(randperm(length(pts))[1:n])
-    SpatialPoints{T}(pts.coords[idx], pts.feature_id[idx], copy(pts.feature_codebook),
-                     pts.instance_id[idx], _subset_feature_columns(pts.feature_columns, idx),
-                     pts.coord_system, nothing)
+    SpatialPoints{T}(
+        pts.coords[idx], pts.feature_id[idx], copy(pts.feature_codebook),
+        pts.instance_id[idx], _subset_feature_columns(pts.feature_columns, idx),
+        _subset_origin_ids(pts.origin_id, idx), copy(pts.origin_codebook),
+        pts.coord_system, nothing,
+    )
 end
 
 function Base.getindex(pts::SpatialPoints{T}, mask::AbstractVector{Bool}) where T
-    SpatialPoints{T}(pts.coords[mask], pts.feature_id[mask], copy(pts.feature_codebook),
-                     pts.instance_id[mask], _subset_feature_columns(pts.feature_columns, mask),
-                     pts.coord_system, nothing)
+    SpatialPoints{T}(
+        pts.coords[mask], pts.feature_id[mask], copy(pts.feature_codebook),
+        pts.instance_id[mask], _subset_feature_columns(pts.feature_columns, mask),
+        _subset_origin_ids(pts.origin_id, mask), copy(pts.origin_codebook),
+        pts.coord_system, nothing,
+    )
 end
 
 function Base.getindex(pts::SpatialPoints{T}, gene::String) where T

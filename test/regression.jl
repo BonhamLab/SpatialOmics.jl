@@ -1193,10 +1193,14 @@ end
             n_fovs = count(cs -> startswith(cs, "fov_"), keys(ds.coord_systems))
             @test length(fovshp) == n_fovs
             @test coord_system(fovshp) == "global_px"
-
-            ann = ds.metadata["transcripts_annotations"]
-            @test length(ann.fov) == length(pts)
-            @test length(ann.z)   == length(pts)
+            @test length(sources(ds)) == n_fovs
+            @test origin_ids(pts) !== nothing
+            @test origin_ids(shp) !== nothing
+            @test length(features(pts, :z)) == length(pts)
+            @test length(features(pts, :CellComp)) == length(pts)
+            @test !haskey(ds.metadata, "transcripts_annotations")
+            first_source = first(sources(ds))
+            @test length(points(view(ds, first_source), "transcripts")) > 0
         end
     end
 
