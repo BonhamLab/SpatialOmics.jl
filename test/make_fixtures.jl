@@ -128,7 +128,7 @@ else
     sub["cell_labels"] = crop_labels(lbl, ylo, yhi, xlo, xhi)
 
     rm(XENIUM_OUT; recursive=true, force=true)
-    write!(sub, XENIUM_OUT, SpatialDataZarr())
+    save!(sub; path=XENIUM_OUT)
     @info "Xenium fixture written → $XENIUM_OUT" size=Base.format_bytes(
         sum(filesize(f) for (r,_,fs) in walkdir(XENIUM_OUT) for f in joinpath.(r,fs)))
 
@@ -196,7 +196,7 @@ else
     sub[VIS_IMAGE]  = images(roi, VIS_IMAGE)
 
     rm(VISIUM_OUT; recursive=true, force=true)
-    write!(sub, VISIUM_OUT, SpatialDataZarr())
+    save!(sub; path=VISIUM_OUT)
     @info "Visium fixture written → $VISIUM_OUT"
 
     fig2 = Figure(size=(600, 600))

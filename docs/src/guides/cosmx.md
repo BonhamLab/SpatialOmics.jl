@@ -15,7 +15,7 @@ ds = read(CosMx(), "/path/to/cosmx_export/")
 ds = read(CosMx(morphology_dir="/path/to/Morphology2D"), "/path/to/cosmx_export/")
 
 # Cache to disk for faster subsequent loads
-write!(ds, "/path/to/cache.zarr", SpatialDataZarr())
+save!(ds; path="/path/to/cache.zarr")
 ds2 = read(SpatialDataZarr(), "/path/to/cache.zarr")
 ```
 
@@ -92,11 +92,11 @@ tightlimits!(ax)
 fig
 ```
 
-## Export to SpatialData
+## Native persistence
 
-The resulting Zarr directory is compatible with Python's SpatialData library,
-enabling handoff to Python-based downstream analysis:
+Save the assembled dataset in the native SpatialOmics Zarr layout for later
+Julia workflows. Python handoff requires an explicit SpatialData export path.
 
 ```julia
-write!(ds, "/path/to/output.zarr", SpatialDataZarr())
+save!(ds; path="/path/to/output.zarr")
 ```

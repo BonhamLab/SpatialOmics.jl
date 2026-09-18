@@ -3,7 +3,7 @@
 """
     SpatialDataZarr()
 
-Format token for the native SpatialData OME-Zarr on-disk format.
+Format token for the native SpatialOmics Zarr on-disk format.
 
 Pass to `read` or `write!` to select this backend:
 
@@ -12,8 +12,9 @@ ds = read(SpatialDataZarr(), "/path/to/experiment.zarr")
 write!(ds, "/path/to/output.zarr", SpatialDataZarr())
 ```
 
-`read` auto-detects whether the Zarr store was written by Python's SpatialData
-library or by this package and dispatches accordingly.
+`read` auto-detects native stores and supported Python SpatialData stores.
+Native stores are not presented as Python-compatible SpatialData exports;
+validated interchange is a separate conversion boundary.
 
 # See also
 [`CosMx`](@ref), [`write!`](@ref)
@@ -85,6 +86,9 @@ function _write_zarr(root::String, name::String, pts::SpatialPoints{T}) where T
     open(joinpath(grp, "feature_codebook.json"), "w") do io
         JSON.print(io, pts.feature_codebook)
     end
+    if pts.feature_columns !== nothing
+        _write_named_tuple(joinpath(grp, "feature_columns"), pts.feature_columns)
+    end
 end
 
 # ── Write SpatialShapes ────────────────────────────────────────────────────────
@@ -155,7 +159,10 @@ function _read_points_zarr(grp::String) :: SpatialPoints{Float32}
     meta = JSON.parse(read(joinpath(grp, "zarr.json"), String))
     cs   = meta["attributes"]["_spatialdata_attrs"]["coord_system"]
 
-    SpatialPoints{Float32}(coords, feature_id, codebook, instance_id, nothing, cs, nothing)
+    columns_path = joinpath(grp, "feature_columns")
+    feature_columns = isdir(columns_path) ? _read_named_tuple(columns_path) : nothing
+
+    SpatialPoints{Float32}(coords, feature_id, codebook, instance_id, feature_columns, cs, nothing)
 end
 
 # ── Read SpatialShapes ─────────────────────────────────────────────────────────
@@ -195,16 +202,25 @@ _transform_to_dict(t::Affine) =
     Dict("type" => "affine", "src" => t.src, "dst" => t.dst,
          "matrix" => [collect(t.matrix[i, :]) for i in 1:3])
 
-_transform_to_dict(::AbstractTransformation) =
-    Dict("type" => "identity", "src" => "", "dst" => "")
+_transform_to_dict(t::Sequence) = Dict(
+    "type" => "sequence",
+    "src" => t.src,
+    "dst" => t.dst,
+    "steps" => [_transform_to_dict(step) for step in t.steps],
+)
 
 function _transform_from_dict(d)
     if d["type"] == "affine"
         rows = d["matrix"]
         mat  = SMatrix{3,3,Float64}(Float64(rows[i][j]) for i in 1:3, j in 1:3)
         Affine(mat, d["src"], d["dst"])
-    else
+    elseif d["type"] == "sequence"
+        Sequence(AbstractTransformation[_transform_from_dict(step) for step in d["steps"]],
+                 String(d["src"]), String(d["dst"]))
+    elseif d["type"] == "identity"
         Identity(d["src"], d["dst"])
+    else
+        throw(ArgumentError("unsupported transformation type $(repr(d["type"]))"))
     end
 end
 
@@ -341,8 +357,6 @@ function _kind_meta(kind::Membership{strict}) where strict
 end
 _kind_meta(::Expression) = Dict("kind" => "Expression")
 
-_write_zarr(::String, ::String, ::Any) = nothing  # SpatialTable and future types not yet serialized
-
 function _write_zarr_relation(root::String, name::String, rel::SpatialRelation)
     grp = joinpath(root, "relations", name)
     mkpath(grp)
@@ -392,9 +406,12 @@ end
 
 # ── Dataset write ──────────────────────────────────────────────────────────────
 
-function _write_metadata_entry(root::String, key::String, val::NamedTuple)
-    grp = joinpath(root, "metadata", key)
+function _write_named_tuple(grp::String, val::NamedTuple)
     mkpath(grp)
+    lengths = Int[length(column) for column in values(val)]
+    isempty(lengths) || all(==(first(lengths)), lengths) || throw(ArgumentError(
+        "all columns in a named tuple must have the same length",
+    ))
     for (field, vec) in pairs(val)
         fname = string(field)
         if vec isa AbstractVector{<:Real}
@@ -407,11 +424,42 @@ function _write_metadata_entry(root::String, key::String, val::NamedTuple)
             open(joinpath(grp, fname * "_codebook.json"), "w") do io
                 JSON.print(io, codebook)
             end
+        else
+            throw(ArgumentError(
+                "cannot persist column $(repr(field)) with type $(typeof(vec)); " *
+                "expected a real-valued or string-valued vector",
+            ))
         end
     end
     open(joinpath(grp, "type.json"), "w") do io
         JSON.print(io, Dict("type" => "named_tuple"))
     end
+    nothing
+end
+
+function _read_named_tuple(grp::String)
+    fields = Symbol[]
+    vecs = AbstractVector[]
+    for entry in readdir(grp)
+        entry == "type.json" && continue
+        endswith(entry, "_codebook.json") && continue
+        !isdir(joinpath(grp, entry)) && continue
+        codebook_path = joinpath(grp, entry * "_codebook.json")
+        ids = zopen(joinpath(grp, entry), "r"; zarr_format=3)[:]
+        if isfile(codebook_path)
+            codebook = convert(Vector{String}, JSON.parse(read(codebook_path, String)))
+            push!(fields, Symbol(entry))
+            push!(vecs, [codebook[id + 1] for id in ids])
+        else
+            push!(fields, Symbol(entry))
+            push!(vecs, ids)
+        end
+    end
+    NamedTuple{Tuple(fields)}(vecs)
+end
+
+function _write_metadata_entry(root::String, key::String, val::NamedTuple)
+    _write_named_tuple(joinpath(root, "metadata", key), val)
 end
 
 function _write_metadata_entry(root::String, key::String, val)
@@ -437,26 +485,7 @@ function _read_user_metadata!(ds::SpatialDataset, path::String)
         isdir(grp) || continue
         type_path = joinpath(grp, "type.json")
         if isfile(type_path) && get(JSON.parse(read(type_path, String)), "type", "") == "named_tuple"
-            fields = Symbol[]
-            vecs   = AbstractVector[]
-            for entry in readdir(grp)
-                entry == "type.json"                && continue
-                endswith(entry, "_codebook.json")   && continue
-                !isdir(joinpath(grp, entry))        && continue
-                codebook_path = joinpath(grp, entry * "_codebook.json")
-                ids = zopen(joinpath(grp, entry), "r"; zarr_format=3)[:]
-                if isfile(codebook_path)
-                    codebook = convert(Vector{String},
-                                       JSON.parse(read(codebook_path, String)))
-                    push!(fields, Symbol(entry))
-                    push!(vecs, [codebook[id+1] for id in ids])
-                else
-                    push!(fields, Symbol(entry))
-                    push!(vecs, ids)
-                end
-            end
-            isempty(fields) && continue
-            ds.metadata.data[key] = NamedTuple{Tuple(fields)}(vecs)
+            ds.metadata.data[key] = _read_named_tuple(grp)
         elseif isfile(joinpath(grp, "value.json"))
             ds.metadata.data[key] = JSON.parse(read(joinpath(grp, "value.json"), String))
         end
@@ -493,30 +522,271 @@ function _write_dataset_zarr(ds::SpatialDataset, path::String)
     path
 end
 
+_element_group(::SpatialPoints) = "points"
+_element_group(::SpatialShapes) = "shapes"
+_element_group(::SpatialImage) = "images"
+_element_group(::SpatialLabels) = "labels"
+
+function _atomic_replace(source::String, target::String)
+    mkpath(dirname(target))
+    backup = ispath(target) ? tempname(dirname(target)) : nothing
+    backup === nothing || mv(target, backup)
+    try
+        mv(source, target)
+    catch
+        if backup !== nothing && ispath(backup) && !ispath(target)
+            mv(backup, target)
+        end
+        rethrow()
+    end
+    backup === nothing || rm(backup; recursive=true, force=true)
+    target
+end
+
+function _write_dataset_atomic(ds::SpatialDataset, path::String)
+    target = abspath(path)
+    mkpath(dirname(target))
+    staging = mktempdir(dirname(target); prefix=".spatialomics-save-")
+    try
+        _write_dataset_zarr(ds, staging)
+        _atomic_replace(staging, target)
+    finally
+        isdir(staging) && rm(staging; recursive=true, force=true)
+    end
+    target
+end
+
+function _remove_element_paths!(root::String, name::String; except::Union{Nothing,String}=nothing)
+    for group in ("points", "shapes", "images", "labels")
+        group == except && continue
+        path = joinpath(root, group, name)
+        ispath(path) && rm(path; recursive=true, force=true)
+    end
+    nothing
+end
+
+function _save_element!(ds::SpatialDataset, name::String)
+    element = ds.elements[name]
+    group = _element_group(element)
+    staging = mktempdir(dirname(ds.backing.path); prefix=".spatialomics-element-")
+    try
+        _init_zarr_root(staging)
+        _write_zarr(staging, name, element)
+        _atomic_replace(joinpath(staging, group, name), joinpath(ds.backing.path, group, name))
+        _remove_element_paths!(ds.backing.path, name; except=group)
+    finally
+        isdir(staging) && rm(staging; recursive=true, force=true)
+    end
+    nothing
+end
+
+function _save_relation!(ds::SpatialDataset, name::String)
+    staging = mktempdir(dirname(ds.backing.path); prefix=".spatialomics-relation-")
+    try
+        _init_zarr_root(staging)
+        _write_zarr_relation(staging, name, ds.relations[name])
+        _atomic_replace(
+            joinpath(staging, "relations", name),
+            joinpath(ds.backing.path, "relations", name),
+        )
+    finally
+        isdir(staging) && rm(staging; recursive=true, force=true)
+    end
+    nothing
+end
+
+function _save_metadata!(ds::SpatialDataset, name::String)
+    staging = mktempdir(dirname(ds.backing.path); prefix=".spatialomics-metadata-")
+    try
+        _init_zarr_root(staging)
+        _write_metadata_entry(staging, name, ds.metadata[name])
+        _atomic_replace(
+            joinpath(staging, "metadata", name),
+            joinpath(ds.backing.path, "metadata", name),
+        )
+    finally
+        isdir(staging) && rm(staging; recursive=true, force=true)
+    end
+    nothing
+end
+
+function _save_dataset_metadata!(ds::SpatialDataset)
+    staging = mktempdir(dirname(ds.backing.path); prefix=".spatialomics-metadata-")
+    try
+        _init_zarr_root(staging)
+        _write_spatialomics_meta(ds, staging)
+        _atomic_replace(
+            joinpath(staging, "spatialomics_meta.json"),
+            joinpath(ds.backing.path, "spatialomics_meta.json"),
+        )
+    finally
+        isdir(staging) && rm(staging; recursive=true, force=true)
+    end
+    nothing
+end
+
+function _save_change!(ds::SpatialDataset, key::Tuple{Symbol,String}, state::Symbol)
+    kind, name = key
+    if state === :deleted
+        if kind === :element
+            _remove_element_paths!(ds.backing.path, name)
+        elseif kind === :relation
+            rm(joinpath(ds.backing.path, "relations", name); recursive=true, force=true)
+        elseif kind === :metadata
+            rm(joinpath(ds.backing.path, "metadata", name); recursive=true, force=true)
+        end
+    elseif kind === :element
+        _save_element!(ds, name)
+    elseif kind === :relation
+        _save_relation!(ds, name)
+    elseif kind === :metadata
+        _save_metadata!(ds, name)
+    elseif kind === :dataset
+        _save_dataset_metadata!(ds)
+    end
+    nothing
+end
+
 function Base.write(ds::SpatialDataset, path::String, ::SpatialDataZarr)
-    ds.backing.owned && @warn "Backing store is still at temp path \"$(ds.backing.path)\". " *
-        "Call write!(ds, path, SpatialDataZarr()) to also update the dataset location."
-    _write_dataset_zarr(ds, path)
+    abspath(path) == ds.backing.path && throw(ArgumentError(
+        "cannot export over the active backing store; call save!(ds) instead",
+    ))
+    _write_dataset_atomic(ds, path)
+end
+
+function _save_all!(ds::SpatialDataset)
+    _ensure_open(ds.backing)
+    selected = collect(ds.backing.changes)
+    for (key, state) in selected
+        _save_change!(ds, key, state)
+    end
+    for (key, _) in selected
+        delete!(ds.backing.changes, key)
+    end
+    ds
+end
+
+"""
+    save!(ds) → ds
+    save!(ds, name) → ds
+    save!(ds; path) → ds
+
+Persist staged changes. With no second argument, all changes are written to the
+current backing store. When the positional argument names an element, relation,
+or metadata entry, only matching changes are written. When `path` differs from
+the current backing location, a complete snapshot is written atomically and the
+dataset is rebound to that permanent location.
+
+The dirty registry is cleared only after every selected write succeeds.
+
+# See also
+[`dirty`](@ref), [`discard!`](@ref), [`edit!`](@ref)
+"""
+function save!(ds::SpatialDataset, name::String)
+    _ensure_open(ds.backing)
+    selected = [entry for entry in ds.backing.changes if entry[1][2] == name]
+    known = haskey(ds.elements, name) || haskey(ds.relations, name) ||
+        haskey(ds.metadata, name) || name == "coordinate_systems"
+    isempty(selected) && !known && throw(KeyError(name))
+    for (key, state) in selected
+        _save_change!(ds, key, state)
+    end
+    for (key, _) in selected
+        delete!(ds.backing.changes, key)
+    end
+    ds
+end
+
+function save!(ds::SpatialDataset; path::Union{Nothing,String}=nothing)
+    _ensure_open(ds.backing)
+    path === nothing && return _save_all!(ds)
+    target = abspath(path)
+    target == ds.backing.path && return _save_all!(ds)
+    old_path = ds.backing.path
+    old_owned = ds.backing.owned
+    relative_target = relpath(target, old_path)
+    relative_parts = splitpath(relative_target)
+    if old_owned && !isempty(relative_parts) && first(relative_parts) != ".."
+        throw(ArgumentError("cannot save a temporary dataset inside its own backing directory"))
+    end
+    _write_dataset_atomic(ds, target)
+    close.(values(ds.backing.handles))
+    empty!(ds.backing.handles)
+    ds.backing.path = target
+    ds.backing.owned = false
+    empty!(ds.backing.changes)
+    old_owned && old_path != target && rm(old_path; recursive=true, force=true)
+    ds
+end
+
+"""
+    discard!(ds) → ds
+    discard!(ds, name) → ds
+
+Replace staged changes with the corresponding values from the backing store.
+With no name, all staged changes are discarded. A named call affects every
+changed artifact with that name.
+
+# See also
+[`save!`](@ref), [`dirty`](@ref)
+"""
+function discard!(ds::SpatialDataset, name::Union{Nothing,String}=nothing)
+    _ensure_open(ds.backing)
+    selected = [entry for entry in ds.backing.changes if name === nothing || entry[1][2] == name]
+    isempty(selected) && return ds
+    stored = read(SpatialDataZarr(), ds.backing.path)
+    try
+        for ((kind, artifact), _) in selected
+            if kind === :element
+                if haskey(stored.elements, artifact)
+                    element = stored.elements[artifact]
+                    haskey(ds.elements, artifact) && _clear_backref!(ds.elements[artifact])
+                    _set_backref!(element, ds, artifact)
+                    ds.elements[artifact] = element
+                else
+                    current = pop!(ds.elements, artifact, nothing)
+                    current === nothing || _clear_backref!(current)
+                end
+            elseif kind === :relation
+                if haskey(stored.relations, artifact)
+                    ds.relations[artifact] = stored.relations[artifact]
+                else
+                    pop!(ds.relations, artifact, nothing)
+                end
+            elseif kind === :metadata
+                if haskey(stored.metadata, artifact)
+                    ds.metadata.data[artifact] = stored.metadata[artifact]
+                else
+                    pop!(ds.metadata.data, artifact, nothing)
+                end
+            elseif kind === :dataset
+                ds.coord_systems = copy(stored.coord_systems)
+                ds.transforms = copy(stored.transforms)
+            end
+        end
+    finally
+        close(stored)
+    end
+    for (key, _) in selected
+        delete!(ds.backing.changes, key)
+    end
+    ds
 end
 
 """
     write!(ds, path, SpatialDataZarr()) → ds
 
-Write `ds` to the SpatialData OME-Zarr format at `path` and update the
-dataset's backing store to point at the new location.
+Compatibility spelling for `save!(ds; path)`. Write a complete native snapshot
+at `path` and update the dataset's backing store to point at the new location.
 
-Unlike the non-mutating `write`, `write!` marks the backing store as permanent
-(non-owned) so the directory is not deleted when `ds` is garbage collected.
-Use this as the canonical "save" operation.
+New code should prefer [`save!`](@ref). The non-mutating `write` exports a
+snapshot without changing the active backing location or dirty state.
 
 # See also
-[`SpatialDataZarr`](@ref), [`keep!`](@ref)
+[`SpatialDataZarr`](@ref), [`save!`](@ref), [`keep!`](@ref)
 """
 function write!(ds::SpatialDataset, path::String, ::SpatialDataZarr)
-    _write_dataset_zarr(ds, path)
-    ds.backing.path  = abspath(path)
-    ds.backing.owned = false
-    ds
+    save!(ds; path)
 end
 
 # ── Dataset read ───────────────────────────────────────────────────────────────
@@ -544,7 +814,9 @@ function Base.read(::SpatialDataZarr, path::String) :: SpatialDataset
                               ("images", _read_image_zarr),
                               ("labels", _read_labels_zarr))
         for name in _zarr_element_names(path, subdir)
-            ds.elements[name] = reader(joinpath(path, subdir, name))
+            element = reader(joinpath(path, subdir, name))
+            _set_backref!(element, ds, name)
+            ds.elements[name] = element
         end
     end
     for name in _zarr_element_names(path, "relations")
@@ -822,14 +1094,14 @@ end
 # ── Python SpatialData dataset reader ─────────────────────────────────────────
 
 function _read_python_spatialdata(path::String)
-    ds = SpatialDataset(; path)
+    ds = SpatialDataset()
     str_id_maps = Dict{String, Dict{Int32, String}}()
 
     for (kind, reader) in (("images", _read_ome_image_zarr_py),
                             ("labels", _read_ome_labels_zarr_py))
         for name in _zarr_element_names(path, kind)
             try
-                ds.elements[name] = reader(joinpath(path, kind, name))
+                ds[name] = reader(joinpath(path, kind, name))
             catch e
                 @warn "Could not read $kind \"$name\": $e"
             end
@@ -838,7 +1110,7 @@ function _read_python_spatialdata(path::String)
 
     for name in _zarr_element_names(path, "tables")
         try
-            ds.relations[name] = _read_anndata_table_zarr(joinpath(path, "tables", name))
+            ds[name] = _read_anndata_table_zarr(joinpath(path, "tables", name))
         catch e
             @warn "Could not read table \"$name\": $e"
         end
@@ -847,7 +1119,7 @@ function _read_python_spatialdata(path::String)
     for name in _zarr_element_names(path, "shapes")
         try
             el, id_map = _read_shapes_parquet(joinpath(path, "shapes", name))
-            ds.elements[name] = el
+            ds[name] = el
             !isempty(id_map) && (str_id_maps[name] = id_map)
         catch e
             @warn "Could not read shapes \"$name\": $e"
@@ -856,7 +1128,7 @@ function _read_python_spatialdata(path::String)
 
     for name in _zarr_element_names(path, "points")
         try
-            ds.elements[name] = _read_points_parquet(joinpath(path, "points", name))
+            ds[name] = _read_points_parquet(joinpath(path, "points", name))
         catch e
             @warn "Could not read points \"$name\": $e"
         end
@@ -864,12 +1136,13 @@ function _read_python_spatialdata(path::String)
 
     !isempty(str_id_maps) && (ds.metadata["_instance_id_str_map"] = str_id_maps)
     # Register coord systems inferred from element metadata (Python format lacks explicit registry).
-    # Bypass push!(ds, ...) to avoid writing spatialomics_meta.json into the Python SpatialData store.
+    # Insert them in a batch, then mark the dataset-level metadata once.
     for (_, el) in ds.elements
         cs = coord_system(el)
         isempty(cs) && continue
         haskey(ds.coord_systems, cs) || (ds.coord_systems[cs] = CoordinateSystem(cs))
     end
+    _mark_dirty!(ds.backing, (:dataset, "coordinate_systems"))
     ds
 end
 
@@ -1229,7 +1502,7 @@ function Base.read(fmt::CosMx, path::String;
         end
     end
 
-    cache !== nothing && _write_spatialomics_meta(ds, ds.backing.path)
+    cache !== nothing && save!(ds)
 
     ds
 end

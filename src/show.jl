@@ -80,7 +80,8 @@ function Base.show(io::IO, ds::SpatialDataset)
     cs  = ncs == 0 ? "" :
           ncs <= 3  ? " [$(join(keys(ds.coord_systems), ", "))]" :
                       " ($ncs coord systems)"
-    print(io, "SpatialDataset($n element$(n == 1 ? "" : "s")$cs)")
+    state = isdirty(ds) ? ", unsaved=$(length(ds.backing.changes))" : ""
+    print(io, "SpatialDataset($n element$(n == 1 ? "" : "s")$cs$state)")
 end
 
 # Full REPL form — used when ds is displayed at top level
@@ -88,7 +89,8 @@ function Base.show(io::IO, ::MIME"text/plain", ds::SpatialDataset)
     n   = length(ds.elements)
     nr  = length(ds.relations)
     ncs = length(ds.coord_systems)
-    println(io, "SpatialDataset with $n element$(n == 1 ? "" : "s"), $nr relation$(nr == 1 ? "" : "s"), $ncs coord_system$(ncs == 1 ? "" : "s"):")
+    persistence = isdirty(ds) ? "$(length(ds.backing.changes)) unsaved change$(length(ds.backing.changes) == 1 ? "" : "s")" : "saved"
+    println(io, "SpatialDataset with $n element$(n == 1 ? "" : "s"), $nr relation$(nr == 1 ? "" : "s"), $ncs coord_system$(ncs == 1 ? "" : "s") ($persistence):")
     for (name, el) in ds.elements
         print(io, "  \"$name\" => ")
         show(io, el)
@@ -108,5 +110,9 @@ function Base.show(io::IO, ::MIME"text/plain", ds::SpatialDataset)
         if !isempty(ds.transforms)
             print(io, "\n  transforms: $(length(ds.transforms))")
         end
+    end
+    if isdirty(ds)
+        println(io)
+        print(io, "  unsaved: ", join(("$(c.kind):$(c.name) ($(c.state))" for c in dirty(ds)), ", "))
     end
 end

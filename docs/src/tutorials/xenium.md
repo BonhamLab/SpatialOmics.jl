@@ -128,7 +128,7 @@ sub["transcripts"]     = collect(points(roi, "transcripts"))
 sub["cell_boundaries"] = collect(shapes(roi, "cell_boundaries"))
 sub["morphology_focus"] = images(roi, "morphology_focus")
 
-write!(sub, "test/data/xenium_small.zarr", SpatialDataZarr())
+save!(sub; path="test/data/xenium_small.zarr")
 ```
 
 `view` is lazy — no data is read until `collect` or the plot verb materialises

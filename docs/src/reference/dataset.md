@@ -15,6 +15,13 @@ BackingStore
 ```@docs
 with_dataset
 keep!
+save!
+discard!
+edit!
+touch!
+isdirty
+dirty
+Base.close(::SpatialDataset)
 ```
 
 ## Accessors

@@ -4,6 +4,27 @@ _element_name(el::Union{SpatialPoints, SpatialShapes}) =
     (att = _dataset_ref(el); att === nothing ? "" : att[2])
 _element_name(::Any) = ""
 
+# FlexiJoins' spatial-tree mode needs both row indexing and direct column
+# properties. A plain Tables.rowtable supplies only the former.
+struct _SpatialJoinTable{C,T} <: AbstractVector{T}
+    columns::C
+end
+
+function _SpatialJoinTable(columns::NamedTuple)
+    row_type = NamedTuple{keys(columns),Tuple{map(eltype, values(columns))...}}
+    _SpatialJoinTable{typeof(columns),row_type}(columns)
+end
+
+Base.IndexStyle(::Type{<:_SpatialJoinTable}) = IndexLinear()
+Base.size(table::_SpatialJoinTable) = (length(first(values(table.columns))),)
+function Base.getindex(table::_SpatialJoinTable, index::Int)
+    NamedTuple{keys(table.columns)}(map(column -> column[index], values(table.columns)))
+end
+function Base.getproperty(table::_SpatialJoinTable, name::Symbol)
+    name === :columns && return getfield(table, :columns)
+    getproperty(getfield(table, :columns), name)
+end
+
 # ── Default dispatch — token inferred from argument types ─────────────────────
 
 """
@@ -62,9 +83,9 @@ function analyze(src::SpatialShapes, dst::SpatialShapes, obs;
     dst_pos   = Dict{Int32,Int}(id => i for (i, id) in enumerate(dst.instance_id))
 
     src_geoms = GeometryOps.centroid.(src.geometries)
-    src_tbl   = Tables.rowtable((geom=src_geoms,         label=labels,
-                                  src_instance_id=src.instance_id))
-    dst_tbl   = Tables.rowtable((poly=dst.geometries,    dst_instance_id=dst.instance_id))
+    src_tbl   = _SpatialJoinTable((geom=src_geoms, label=labels,
+                                   src_instance_id=src.instance_id))
+    dst_tbl   = _SpatialJoinTable((poly=dst.geometries, dst_instance_id=dst.instance_id))
 
     for row in innerjoin((src_tbl, dst_tbl), by_pred(:geom, predicate, :poly))
         lpos = get(label_pos, row[1].label, 0)
@@ -92,10 +113,9 @@ function analyze(::Expression, pts::SpatialPoints, cells::SpatialShapes;
     weights  = zeros(Float32, n_cells, n_genes)
     cell_pos = Dict{Int32,Int}(id => i for (i, id) in enumerate(cells.instance_id))
 
-    # FlexiJoins expects row-iterable tables; result rows are Tuple{src_row, dst_row}.
-    # Points go first (simpler geoms), cells second (tree-indexed by FlexiJoins).
-    pts_tbl   = Tables.rowtable((pt=pts.coords,         feature_id=pts.feature_id))
-    cells_tbl = Tables.rowtable((poly=cells.geometries, instance_id=cells.instance_id))
+    # Points go first (simpler geometries), cells second (tree-indexed).
+    pts_tbl   = _SpatialJoinTable((pt=pts.coords, feature_id=pts.feature_id))
+    cells_tbl = _SpatialJoinTable((poly=cells.geometries, instance_id=cells.instance_id))
 
     for row in innerjoin((pts_tbl, cells_tbl), by_pred(:pt, predicate, :poly))
         gid  = row[1].feature_id
@@ -118,8 +138,8 @@ end
 
 function analyze(::Membership{strict}, pts::SpatialPoints, dst::SpatialShapes;
                  predicate=GeometryOps.within) where strict
-    pts_tbl = Tables.rowtable((pt=pts.coords,          pos=Int32.(eachindex(pts.coords))))
-    dst_tbl = Tables.rowtable((poly=dst.geometries,    dst_instance_id=dst.instance_id))
+    pts_tbl = _SpatialJoinTable((pt=pts.coords, pos=Int32.(eachindex(pts.coords))))
+    dst_tbl = _SpatialJoinTable((poly=dst.geometries, dst_instance_id=dst.instance_id))
 
     joined  = collect(innerjoin((pts_tbl, dst_tbl), by_pred(:pt, predicate, :poly)))
     src_ids = Int32[row[1].pos            for row in joined]
@@ -135,8 +155,8 @@ function analyze(::Membership{strict}, src::SpatialShapes, dst::SpatialShapes;
     src_geoms = strict ? src.geometries : GeometryOps.centroid.(src.geometries)
     pred      = isnothing(predicate) ? GeometryOps.within : predicate
 
-    src_tbl = Tables.rowtable((geom=src_geoms,          src_instance_id=src.instance_id))
-    dst_tbl = Tables.rowtable((poly=dst.geometries,      dst_instance_id=dst.instance_id))
+    src_tbl = _SpatialJoinTable((geom=src_geoms, src_instance_id=src.instance_id))
+    dst_tbl = _SpatialJoinTable((poly=dst.geometries, dst_instance_id=dst.instance_id))
 
     joined  = collect(innerjoin((src_tbl, dst_tbl), by_pred(:geom, pred, :poly)))
     src_ids = Int32[row[1].src_instance_id for row in joined]

@@ -110,7 +110,7 @@ sub["Visium_HD_Mouse_Small_Intestine_square_016um"] =
 sub["Visium_HD_Mouse_Small_Intestine_lowres_image"] =
     images(roi, "Visium_HD_Mouse_Small_Intestine_lowres_image")
 
-write!(sub, "test/data/visium_small.zarr", SpatialDataZarr())
+save!(sub; path="test/data/visium_small.zarr")
 ```
 
 ## Working with the committed fixture

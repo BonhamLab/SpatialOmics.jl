@@ -30,6 +30,7 @@ mutable struct SpatialImage{T, N}
     coord_system      :: String
     pixel_to_cs       :: AbstractTransformation        # image pixel coords → coord_system
     display_transform :: Union{Nothing, Function}      # applied post-materialization in display
+    _attachment       :: Union{Nothing, Tuple{WeakRef, String}}
 end
 
 function _default_image_axes(N::Int)
@@ -48,8 +49,20 @@ function SpatialImage(data::AbstractArray{T, N};
     pyr = pyramid === nothing ? AbstractArray{T,N}[] :
           AbstractArray{T,N}[p for p in pyramid]
     SpatialImage{T, N}(data, pyr, NTuple{N, Symbol}(axes), channel_names,
-                       coord_system, pixel_to_cs, display_transform)
+                       coord_system, pixel_to_cs, display_transform, nothing)
 end
+
+_dataset_ref(img::SpatialImage) = img._attachment
+function _set_backref!(img::SpatialImage, ds::SpatialDataset, name::String)
+    img._attachment = (WeakRef(ds), name)
+end
+function _clear_backref!(img::SpatialImage)
+    img._attachment = nothing
+    img
+end
+
+Base.setindex!(ds::SpatialDataset, img::SpatialImage, name::String) =
+    _attach_element!(ds, img, name)
 
 # ── Accessors ──────────────────────────────────────────────────────────────────
 
@@ -109,6 +122,8 @@ pyramid levels are discarded before building.
 [`scaleminmax`](@ref), [`channel`](@ref)
 """
 function build_pyramid!(img::SpatialImage, n_levels::Int=3)
+    owner = _owning_dataset(img)
+    owner === nothing || touch!(owner, _dataset_ref(img)[2])
     empty!(img.pyramid)
     sdims   = _spatial_dims(img.axes)
     current = img.data
@@ -144,6 +159,9 @@ struct SpatialLabels{T<:Integer, N}
     coord_system :: String
     pixel_to_cs  :: AbstractTransformation
 end
+
+Base.setindex!(ds::SpatialDataset, lbl::SpatialLabels, name::String) =
+    _attach_element!(ds, lbl, name)
 
 function SpatialLabels(data::AbstractArray{T, N};
                        axes         = _default_image_axes(N),

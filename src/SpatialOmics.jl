@@ -33,7 +33,7 @@ export
     # Dataset
     BackingStore, SpatialDataset,
     elements, coord_systems, transform,
-    with_dataset, keep!,
+    with_dataset, keep!, save!, discard!, edit!, touch!, isdirty, dirty,
     # Elements
     SpatialPoints, SpatialShapes, SpatialShape,
     Polygon, Point2f,

@@ -293,6 +293,8 @@ when the element is attached to a dataset.
 [`apply`](@ref)
 """
 function apply!(t::AbstractTransformation, pts::SpatialPoints{T}) where T
+    owner = _owning_dataset(pts)
+    owner === nothing || touch!(owner, _dataset_ref(pts)[2])
     map!(pts.coords, pts.coords) do p
         v = apply(t, p)
         Point{2,T}(v[1], v[2])
@@ -309,6 +311,8 @@ function apply(t::AbstractTransformation, shp::SpatialShapes{G}) where G
 end
 
 function apply!(t::AbstractTransformation, shp::SpatialShapes{G}) where G
+    owner = _owning_dataset(shp)
+    owner === nothing || touch!(owner, _dataset_ref(shp)[2])
     for i in eachindex(shp.geometries)
         shp.geometries[i] = _transform_geom(t, shp.geometries[i])
     end
@@ -327,7 +331,7 @@ end
 
 _dataset_ref(el::SpatialPoints)  = el._attachment
 _dataset_ref(el::SpatialShapes)  = el._attachment
-_dataset_ref(::Any)              = nothing   # images, labels, tables: no ref yet
+_dataset_ref(::Any)              = nothing   # immutable labels and detached extension types
 
 function _owning_dataset(el)
     att = _dataset_ref(el)
@@ -340,6 +344,15 @@ function _set_backref!(el::Union{SpatialPoints, SpatialShapes},
     el._attachment = (WeakRef(ds), name)
 end
 _set_backref!(::Any, ::SpatialDataset, ::String) = nothing  # no-op for other types
+
+function _clear_backref!(el::Union{SpatialPoints, SpatialShapes})
+    el._attachment = nothing
+    el
+end
+_clear_backref!(el) = el
+
+Base.setindex!(ds::SpatialDataset, el::Union{SpatialPoints,SpatialShapes}, name::String) =
+    _attach_element!(ds, el, name)
 
 function Base.copy(pts::SpatialPoints{T}) where T
     SpatialPoints{T}(copy(pts.coords), copy(pts.feature_id), copy(pts.feature_codebook),

@@ -36,28 +36,56 @@ tx  = points(ds, "transcripts")    # SpatialPoints or error
 img = images(ds, "morphology")     # SpatialImage or error
 ```
 
-Accessing [`elements`](@ref)`(ds)` directly returns the raw `OrderedDict` without type
-checking. Use typed accessors in application code; `elements` is useful for
-iteration or introspection.
+[`elements`](@ref)`(ds)` returns a shallow dictionary snapshot. Changing that
+dictionary does not change the dataset. Use typed accessors for retrieval and
+[`edit!`](@ref) when mutating an attached element.
 
 ## The backing store
 
-Every [`SpatialDataset`](@ref) is associated with a [`BackingStore`](@ref) — a Zarr directory
-on disk. This is not optional. The design exists because:
+Every [`SpatialDataset`](@ref) is associated with a [`BackingStore`](@ref) — a
+Zarr directory on disk. This provides a durable target for large, lazily loaded
+data without forcing every analysis step to perform I/O.
 
 1. **Lazy loading** — images and large point clouds can exceed available RAM.
    Zarr arrays are read on demand through `DiskArrays.jl`.
-2. **Persistence by default** — operations that produce new datasets (such as
-   `read`) always have a place to write without a separate "save" step.
-3. **SpatialData compatibility** — the on-disk layout matches the
-   [SpatialData specification](https://spatialdata.scverse.org/), enabling
-   round-trip with Python tools without a conversion step.
+2. **Explicit checkpoints** — supported mutations are staged and can be saved
+   together or element by element.
+3. **Visible state** — [`isdirty`](@ref), [`dirty`](@ref), and dataset display
+   distinguish saved data from unsaved work.
 
 When `SpatialDataset()` is called without a `path`, a temporary directory is
-created and owned by the dataset — it is deleted automatically when the dataset
-is garbage collected or `close`d. Supply `path` to write directly to a
-persistent location, or call [`write!`](@ref)`(ds, path, `[`SpatialDataZarr`](@ref)`())` to move a
-temporary store to a permanent one.
+created and owned by the dataset. Supply `path` to choose a persistent backing
+location. In both cases, mutations remain staged until [`save!`](@ref) is
+called:
+
+```julia
+ds["transcripts"] = transcripts
+isdirty(ds)                  # true
+dirty(ds)                    # identifies the staged element
+save!(ds, "transcripts")     # save one element
+save!(ds)                    # save everything else
+```
+
+Use `save!(ds; path="/data/experiment.zarr")` to atomically write a complete
+snapshot and rebind a temporary dataset to a permanent location. `close(ds)`
+rejects unsaved changes; `discard!(ds)` restores saved state, while
+`close(ds; discard=true)` explicitly abandons it.
+
+Mutation through package operations is tracked automatically. For mutation
+through an external API, use a scoped edit or mark the element afterward:
+
+```julia
+edit!(ds, "transcripts") do points
+    points.feature_id[1] = 2
+end
+
+external_mutation!(points(ds, "transcripts"))
+touch!(ds, "transcripts")
+```
+
+The native layout is a SpatialOmics format. Reading supported Python
+SpatialData stores is an import operation; native stores should not be assumed
+to round-trip through Python without an explicit exporter.
 
 ## Instance IDs and cross-element linkage
 

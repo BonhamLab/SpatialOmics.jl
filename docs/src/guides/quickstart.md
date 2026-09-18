@@ -9,7 +9,7 @@ first argument to `read`:
 using SpatialOmics
 import SpatialOmics as SO
 
-# SpatialData OME-Zarr (Xenium, CosMx, Visium, MERFISH — any SpatialData-compatible store)
+# Native Zarr or a supported SpatialData Zarr store
 ds = read(SpatialDataZarr(), "/path/to/experiment.zarr")
 
 # CosMx SMI raw flat-file export
@@ -87,9 +87,9 @@ multi-channel display, and channel selection.
 ## Saving
 
 ```julia
-write!(ds, "/path/to/output.zarr", SpatialDataZarr())
+save!(ds; path="/path/to/output.zarr")
 ```
 
-`write!` writes to disk and updates the dataset's backing store to the new
-location — use this for persistent saves. The resulting Zarr directory is
-compatible with Python's SpatialData library.
+`save!` writes a complete native snapshot and updates the dataset's backing
+location. Subsequent package-mediated mutations are visible through
+`isdirty(ds)` and remain staged until the next `save!` call.
