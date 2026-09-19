@@ -3,6 +3,13 @@
 CosMx SMI exports a flat-file directory with per-FOV transcripts, cell
 segmentation polygons, and optional tissue images (Morphology2D TIF tiles).
 
+For a reproducible public input, Bruker publishes a [CosMx Human Lymph Node
+FFPE dataset](https://brukerspatialbiology.com/products/cosmx-spatial-molecular-imager/ffpe-dataset/cosmx-human-lymph-node-ffpe-dataset/)
+with transcript coordinates, cell metadata, FOV positions, polygons, and
+images. Full public releases are too large for routine documentation builds;
+rendered examples should be generated from a documented subset and committed
+in the same way as the Xenium and Visium tutorial figures.
+
 ## Loading
 
 ```julia

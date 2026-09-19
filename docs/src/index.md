@@ -45,6 +45,8 @@ fig
 
 - **[Explanation](@ref "The data model")** — Why things are designed the way they
   are: the data model, coordinate system graph, and lazy view semantics.
+- **[Tutorials](@ref "Tutorials")** — Executable core lessons plus
+  pre-rendered workflows using public technology datasets.
 - **[Reference](@ref "Dataset")** — Complete API documentation for all exported
   functions and types.
 - **[Guides](@ref "Quickstart")** — Task-oriented walkthroughs: loading data,

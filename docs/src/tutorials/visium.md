@@ -3,13 +3,15 @@
 !!! note "Pre-rendered tutorial"
     This tutorial uses a full Visium HD dataset (~2.4 GB). The code is **not run
     automatically** — images below are pre-rendered and committed to the
-    repository. To reproduce them locally, download the dataset and run
+    repository. To reproduce them locally, download the Visium and Xenium
+    datasets and run
     `test/make_fixtures.jl` as described in the [Creating a subset](#creating-a-subset) section.
 
 ## About the dataset
 
-The example dataset is the **10x Genomics Visium HD Mouse Small Intestine**,
-distributed by the [SpatialData project](https://spatialdata.scverse.org/en/stable/tutorials/notebooks/datasets/)
+The example dataset is the [**10x Genomics Visium HD Mouse Small
+Intestine**](https://www.10xgenomics.com/datasets/visium-hd-cytassist-gene-expression-libraries-of-mouse-intestine),
+distributed in a converted form by the [SpatialData project](https://spatialdata.scverse.org/en/stable/tutorials/notebooks/datasets/)
 as a Python-compatible OME-Zarr store. It contains:
 
 - Square bin shapes at three resolutions: 2 µm, 8 µm, and 16 µm
@@ -67,7 +69,7 @@ fig = Figure(size=(900, 900))
 ax  = Axis(fig[1, 1]; aspect=DataAspect(), yreversed=true,
            title="Visium HD — 16µm bins (subsampled)")
 poly!(ax, SpatialShapes(geometries(shp)[idx]; instance_id=instance_id(shp)[idx],
-                        coord_system=shp.coord_system);
+                        coord_system=coord_system(shp));
      color=:steelblue, strokewidth=0)
 tightlimits!(ax)
 fig
@@ -96,8 +98,14 @@ fig
 ## Creating a subset
 
 The fixture at `test/data/visium_small.zarr` covers a patch of the small
-intestine at 16 µm bin resolution. Generate it with `test/make_fixtures.jl`
-(two-pass, same workflow as the Xenium tutorial):
+intestine at 16 µm bin resolution. Generate it with `test/make_fixtures.jl`;
+inspect the overview and update the region constants before rerunning when a
+different patch is needed:
+
+```bash
+julia --project=docs/heavy -e 'using Pkg; Pkg.instantiate()' # first use
+julia --project=docs/heavy test/make_fixtures.jl /path/to/xenium_ex.zarr /path/to/visium_ex.zarr
+```
 
 ```julia
 # Inspect visium_overview.png to pick a region, then fill in coordinates:

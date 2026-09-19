@@ -21,6 +21,38 @@ validated interchange is a separate conversion boundary.
 """
 struct SpatialDataZarr end
 
+const NATIVE_FORMAT_VERSION = 1
+
+"""
+    native_store_version(path) -> Union{Int,Nothing}
+
+Return the native SpatialOmics format version recorded at `path`. A native
+store without a version returns `nothing`. Python SpatialData stores are not
+native SpatialOmics stores and also return `nothing`.
+"""
+function native_store_version(path::AbstractString)
+    meta_path = joinpath(path, "spatialomics_meta.json")
+    isfile(meta_path) || return nothing
+    meta = JSON.parse(read(meta_path, String))
+    version = get(meta, "format_version", nothing)
+    version === nothing ? nothing : Int(version)
+end
+
+function _require_native_store_version(path::String, meta::AbstractDict)
+    version = get(meta, "format_version", nothing)
+    version === nothing && throw(ArgumentError(
+        "native SpatialOmics store $(repr(path)) predates format versioning and cannot " *
+        "be opened safely; rebuild it from the original input into a new cache path. " *
+        "SpatialOmics does not upgrade stores automatically",
+    ))
+    Int(version) == NATIVE_FORMAT_VERSION || throw(ArgumentError(
+        "native SpatialOmics store $(repr(path)) has format version $version; this " *
+        "SpatialOmics release supports version $NATIVE_FORMAT_VERSION. Rebuild the " *
+        "store from the original input or use an explicit compatible upgrade tool",
+    ))
+    nothing
+end
+
 # ── Low-level zarr helpers ─────────────────────────────────────────────────────
 
 function _write_group_meta(path::String, attrs::AbstractDict=Dict{String,Any}())
@@ -99,13 +131,17 @@ end
 
 # ── Write SpatialShapes ────────────────────────────────────────────────────────
 
+_geometry_storage_kind(::SpatialShapes{<:Polygon}) = "polygon"
+_geometry_storage_kind(::SpatialShapes{<:MultiPolygon}) = "multipolygon"
+
 function _write_zarr(root::String, name::String, shp::SpatialShapes)
     grp = joinpath(root, "shapes", name)
     mkpath(grp)
     _write_group_meta(grp, Dict(
         "_spatialdata_attrs" => Dict(
             "type" => "shapes",
-            "coord_system" => shp.coord_system)))
+            "coord_system" => shp.coord_system,
+            "geometry_type" => _geometry_storage_kind(shp))))
 
     _write_zarr_array(grp, "instance_id", shp.instance_id)
     if shp.origin_id !== nothing
@@ -115,12 +151,14 @@ function _write_zarr(root::String, name::String, shp::SpatialShapes)
         end
     end
 
-    # Ragged CSR layout: polygons → rings → points
-    # poly_offsets[i] = 0-based index of first ring for polygon i (Julia 1-based)
-    # ring_offsets[r] = 0-based index of first point for ring r (Julia 1-based)
+    _write_shape_geometries(grp, shp.geometries)
+end
+
+# Ragged CSR layout: shapes → rings → points.
+function _write_shape_geometries(grp::String, geometries::Vector{<:Polygon})
     total_pts   = 0
     total_rings = 0
-    for g in shp.geometries
+    for g in geometries
         rings = GeoInterface.coordinates(g)
         total_rings += length(rings)
         for ring in rings
@@ -130,12 +168,12 @@ function _write_zarr(root::String, name::String, shp::SpatialShapes)
 
     geom_data     = Matrix{Float64}(undef, total_pts,   2)
     ring_offsets  = Vector{Int64}(undef,  total_rings + 1)
-    poly_offsets  = Vector{Int64}(undef,  length(shp) + 1)
+    poly_offsets  = Vector{Int64}(undef,  length(geometries) + 1)
 
     pt_idx   = 0
     ring_idx = 0
     poly_offsets[1] = 0
-    for (pi, g) in enumerate(shp.geometries)
+    for (pi, g) in enumerate(geometries)
         for ring in GeoInterface.coordinates(g)
             ring_offsets[ring_idx + 1] = pt_idx
             for pt in ring
@@ -152,6 +190,50 @@ function _write_zarr(root::String, name::String, shp::SpatialShapes)
     _write_zarr_array(grp, "geom_data",    geom_data)
     _write_zarr_array(grp, "ring_offsets", ring_offsets)
     _write_zarr_array(grp, "poly_offsets", poly_offsets)
+end
+
+# Multipolygons add one offset level: shapes → polygon components → rings → points.
+function _write_shape_geometries(grp::String, geometries::Vector{<:MultiPolygon})
+    components = [polygon for multi in geometries for polygon in GeoInterface.getgeom(multi)]
+    component_offsets = Vector{Int64}(undef, length(geometries) + 1)
+    component_offsets[1] = 0
+    component_index = 0
+    for (shape_index, multi) in enumerate(geometries)
+        component_index += GeoInterface.ngeom(multi)
+        component_offsets[shape_index + 1] = component_index
+    end
+
+    total_rings = sum(length(GeoInterface.coordinates(polygon)) for polygon in components)
+    total_points = sum(
+        length(ring)
+        for polygon in components
+        for ring in GeoInterface.coordinates(polygon)
+    )
+    geometry_data = Matrix{Float64}(undef, total_points, 2)
+    ring_offsets = Vector{Int64}(undef, total_rings + 1)
+    polygon_offsets = Vector{Int64}(undef, length(components) + 1)
+
+    point_index = 0
+    ring_index = 0
+    polygon_offsets[1] = 0
+    for (polygon_index, polygon) in enumerate(components)
+        for ring in GeoInterface.coordinates(polygon)
+            ring_offsets[ring_index + 1] = point_index
+            for point in ring
+                point_index += 1
+                geometry_data[point_index, 1] = Float64(point[1])
+                geometry_data[point_index, 2] = Float64(point[2])
+            end
+            ring_index += 1
+        end
+        polygon_offsets[polygon_index + 1] = ring_index
+    end
+    ring_offsets[end] = point_index
+
+    _write_zarr_array(grp, "geom_data", geometry_data)
+    _write_zarr_array(grp, "ring_offsets", ring_offsets)
+    _write_zarr_array(grp, "poly_offsets", polygon_offsets)
+    _write_zarr_array(grp, "component_offsets", component_offsets)
 end
 
 # ── Read SpatialPoints ─────────────────────────────────────────────────────────
@@ -195,18 +277,13 @@ function _read_shapes_zarr(grp::String) :: SpatialShapes
     ring_offsets = Vector{Int64}(zopen(joinpath(grp, "ring_offsets"), "r"; zarr_format=3)[:])
     poly_offsets = Vector{Int64}(zopen(joinpath(grp, "poly_offsets"), "r"; zarr_format=3)[:])
 
-    n = length(instance_id)
-    geometries = Vector{Polygon}(undef, n)
-    for pi in 1:n
-        r_start = poly_offsets[pi]     + 1    # 0-based offset → Julia 1-based start
-        r_end   = poly_offsets[pi + 1]        # 0-based exclusive = Julia 1-based end
-        rings   = Vector{Vector{Point2f}}(undef, r_end - r_start + 1)
-        for (ri, r_idx) in enumerate(r_start:r_end)
-            pt_start = ring_offsets[r_idx]     + 1
-            pt_end   = ring_offsets[r_idx + 1]
-            rings[ri] = [Point2f(geom_data[j, 1], geom_data[j, 2]) for j in pt_start:pt_end]
-        end
-        geometries[pi] = length(rings) == 1 ? Polygon(rings[1]) : Polygon(rings[1], rings[2:end])
+    geometries = if isdir(joinpath(grp, "component_offsets"))
+        component_offsets = Vector{Int64}(
+            zopen(joinpath(grp, "component_offsets"), "r"; zarr_format=3)[:],
+        )
+        _read_multipolygons(geom_data, ring_offsets, poly_offsets, component_offsets)
+    else
+        _read_polygons(geom_data, ring_offsets, poly_offsets)
     end
 
     meta = JSON.parse(read(joinpath(grp, "zarr.json"), String))
@@ -220,6 +297,48 @@ function _read_shapes_zarr(grp::String) :: SpatialShapes
         convert(Vector{String}, JSON.parse(read(origin_codebook_path, String))) : String[]
 
     SpatialShapes(geometries; instance_id, origin_id, origin_codebook, coord_system=cs)
+end
+
+function _read_polygon(geom_data, ring_offsets, first_ring::Int, last_ring::Int)
+    rings = Vector{Vector{Point2f}}(undef, last_ring - first_ring + 1)
+    for (output_index, ring_index) in enumerate(first_ring:last_ring)
+        point_start = ring_offsets[ring_index] + 1
+        point_end = ring_offsets[ring_index + 1]
+        rings[output_index] = [
+            Point2f(geom_data[j, 1], geom_data[j, 2]) for j in point_start:point_end
+        ]
+    end
+    length(rings) == 1 ? Polygon(rings[1]) : Polygon(rings[1], rings[2:end])
+end
+
+function _read_polygons(geom_data, ring_offsets, polygon_offsets)
+    polygon_count = length(polygon_offsets) - 1
+    [
+        _read_polygon(
+            geom_data,
+            ring_offsets,
+            polygon_offsets[index] + 1,
+            polygon_offsets[index + 1],
+        )
+        for index in 1:polygon_count
+    ]
+end
+
+function _read_multipolygons(geom_data, ring_offsets, polygon_offsets, component_offsets)
+    shape_count = length(component_offsets) - 1
+    [
+        MultiPolygon([
+            _read_polygon(
+                geom_data,
+                ring_offsets,
+                polygon_offsets[component_index] + 1,
+                polygon_offsets[component_index + 1],
+            )
+            for component_index in
+                (component_offsets[shape_index] + 1):component_offsets[shape_index + 1]
+        ])
+        for shape_index in 1:shape_count
+    ]
 end
 
 # ── Transform serialization helpers ───────────────────────────────────────────
@@ -524,6 +643,7 @@ end
 function _write_spatialomics_meta(ds::SpatialDataset, path::String)
     open(joinpath(path, "spatialomics_meta.json"), "w") do io
         JSON.print(io, Dict(
+            "format_version" => NATIVE_FORMAT_VERSION,
             "coord_systems" => [
                 Dict("name" => cs.name,
                      "axes"  => collect(string.(cs.axes)),
@@ -535,6 +655,7 @@ function _write_spatialomics_meta(ds::SpatialDataset, path::String)
                     "name" => acquisition.name,
                     "region_element" => acquisition.region_element,
                     "region_id" => acquisition.region_id,
+                    "attributes" => acquisition.attributes,
                 )
                 for acquisition in values(ds.sources)
             ],
@@ -833,29 +954,33 @@ end
 function Base.read(::SpatialDataZarr, path::String) :: SpatialDataset
     isdir(path) || error("Path not found: $path")
     _is_python_spatialdata(path) && return _read_python_spatialdata(path)
+    meta_path = joinpath(path, "spatialomics_meta.json")
+    isfile(meta_path) || throw(ArgumentError(
+        "path $(repr(path)) is neither a supported Python SpatialData store nor a " *
+        "native SpatialOmics store",
+    ))
+    meta = JSON.parse(read(meta_path, String))
+    _require_native_store_version(path, meta)
     ds = SpatialDataset(; path)
 
-    meta_path = joinpath(path, "spatialomics_meta.json")
-    if isfile(meta_path)
-        meta = JSON.parse(read(meta_path, String))
-        for cs in get(meta, "coord_systems", [])
-            ds.coord_systems[cs["name"]] = CoordinateSystem(cs["name"];
-                                               axes  = Tuple(Symbol.(cs["axes"])),
-                                               units = Tuple(String.(cs["units"])))
-        end
-        for t in get(meta, "transforms", [])
-            push!(ds.transforms, _transform_from_dict(t))
-        end
-        for acquisition in get(meta, "sources", [])
-            region_element = get(acquisition, "region_element", nothing)
-            region_id = get(acquisition, "region_id", nothing)
-            registered = AcquisitionSource(
-                acquisition["name"];
-                region=region_element,
-                instance_id=region_id,
-            )
-            ds.sources[registered.name] = registered
-        end
+    for cs in get(meta, "coord_systems", [])
+        ds.coord_systems[cs["name"]] = CoordinateSystem(cs["name"];
+                                           axes  = Tuple(Symbol.(cs["axes"])),
+                                           units = Tuple(String.(cs["units"])))
+    end
+    for t in get(meta, "transforms", [])
+        push!(ds.transforms, _transform_from_dict(t))
+    end
+    for acquisition in get(meta, "sources", [])
+        region_element = get(acquisition, "region_element", nothing)
+        region_id = get(acquisition, "region_id", nothing)
+        registered = AcquisitionSource(
+            acquisition["name"];
+            region=region_element,
+            instance_id=region_id,
+            attributes=get(acquisition, "attributes", Dict{String,Any}()),
+        )
+        ds.sources[registered.name] = registered
     end
 
     for (subdir, reader) in (("points", _read_points_zarr),
@@ -1514,7 +1639,12 @@ function Base.read(fmt::CosMx, path::String;
         feature_id       = feat_ids,
         feature_codebook = codebook,
         instance_id      = all_inst,
-        features         = (z=ann_z, CellComp=ann_comp),
+        features         = (
+            fov=ann_fov,
+            z=ann_z,
+            CellComp=ann_comp,
+            cell_ID=ann_cell_id,
+        ),
         origin_id        = transcript_origin_ids,
         origin_codebook  = source_names,
         coord_system     = "global_px")
@@ -1556,6 +1686,7 @@ function Base.read(fmt::CosMx, path::String;
             "fov_$(f)_px";
             region="fovs",
             instance_id=f,
+            attributes=Dict("technology" => "CosMx", "native_id" => f),
         ))
     end
 

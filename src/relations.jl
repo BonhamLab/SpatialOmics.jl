@@ -5,8 +5,8 @@
 
 Abstract supertype for relation-kind dispatch tokens.
 
-Concrete subtypes — [`Membership`](@ref), [`Proximity`](@ref), [`KNN`](@ref),
-[`Expression`](@ref) — are passed to `analyze` to select the algorithm, and
+Concrete subtypes — [`Membership`](@ref) and [`Expression`](@ref) — are passed
+to `analyze` to select the algorithm, and
 stored in the resulting `SpatialRelation` to enable re-dispatch.
 """
 abstract type RelationKind end
@@ -51,11 +51,12 @@ struct Expression <: RelationKind end
 Weighted relation between two named spatial elements.
 
 The relation kind `K` determines the semantics: `Expression` is a bipartite
-cell × gene count matrix; `Membership` is a source-to-destination assignment;
-`Proximity` and `KNN` are graph structures.
+cell × gene count matrix; `Membership` is a source-to-destination assignment.
 
 - `src`, `dst`: element names in the parent dataset
-- `src_ids`, `dst_ids`: `instance_id` vectors identifying the rows/nodes
+- `src_ids`, `dst_ids`: identifiers for the related observations. Point
+  membership stores one-based point-row positions in `src_ids`; shape
+  membership and expression relations use shape `instance_id` values.
 - `weights`: the relation data (`Matrix{Float32}` or `nothing`)
 - `obs`: per-row metadata (Tables.jl-compatible)
 - `var`: per-column metadata (for `Expression`: gene names via `:name`)
@@ -90,7 +91,7 @@ end
 
 # ── Convenience constructors ──────────────────────────────────────────────────
 
-# Membership / Proximity / KNN: no var metadata
+# Non-expression relations have no variable metadata.
 function SpatialRelation(kind::RelationKind, src::String, dst::String,
                           src_ids, dst_ids, weights=nothing;
                           obs=NamedTuple())
@@ -107,9 +108,31 @@ end
 # ── Accessors ─────────────────────────────────────────────────────────────────
 
 """
+    source_ids(rel) -> Vector{Int32}
+
+Return the source observation IDs stored by a relation.
+
+For point [`Membership`](@ref), these are one-based row positions in the source
+`SpatialPoints`. For shape membership and [`Expression`](@ref), they are source
+shape `instance_id` values.
+"""
+source_ids(rel::SpatialRelation) = rel.src_ids
+
+"""
+    destination_ids(rel) -> Vector{Int32}
+
+Return the destination IDs stored by a relation. Expression relations return
+an empty vector because their columns are variables rather than destination
+spatial objects.
+"""
+destination_ids(rel::SpatialRelation) = rel.dst_ids
+
+"""
     nobs(rel) → Int
 
-Return the number of source observations (rows) in a `SpatialRelation`.
+Return the number of relation rows. For `Expression`, this is the number of
+source observations. For `Membership`, it is the number of matched pairs and
+can exceed the number of unique sources when destination shapes overlap.
 """
 nobs(rel::SpatialRelation) = length(rel.src_ids)
 

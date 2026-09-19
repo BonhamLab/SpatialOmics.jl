@@ -19,15 +19,17 @@ SpatialElementView
 Views accept geometric regions or registered acquisition sources:
 
 ```julia
-view(ds, roi)          # geometric membership
-view(ds, "fov_1_px") # acquisition provenance
+view(ds, roi)                             # geometric membership
+view(ds, "fov_1_px")                      # acquisition provenance
+view(ds, ["fov_1_px", "fov_5_px"]) # exact union of acquisition sources
 ```
 
 ## Accessors
 
 ```@docs
 geometry
-select
+roi
+roi!
 ```
 
 ## Example: constructing and intersecting extents

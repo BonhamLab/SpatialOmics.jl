@@ -47,9 +47,14 @@ function _init_zarr_root(path::String)
     open(zarr_json, "w") do io
         write(io, """{"zarr_format":3,"node_type":"group","attributes":{"spatialdata_attrs":{"version":"0.2.0"}}}""")
     end
-    # Write spatialomics_meta.json so new stores are not mistaken for Python SpatialData format
+    # Native metadata distinguishes this layout from Python SpatialData stores.
     open(joinpath(path, "spatialomics_meta.json"), "w") do io
-        write(io, """{"coord_systems":[]}""")
+        JSON.print(io, Dict(
+            "format_version" => NATIVE_FORMAT_VERSION,
+            "coord_systems" => Any[],
+            "transforms" => Any[],
+            "sources" => Any[],
+        ))
     end
 end
 
@@ -94,13 +99,15 @@ end
 # ── Dataset ───────────────────────────────────────────────────────────────────
 
 """
-    AcquisitionSource(name; region=nothing, instance_id=nothing)
+    AcquisitionSource(name; region=nothing, instance_id=nothing, attributes=Dict())
 
 A named acquisition unit such as a field of view, imaging tile, or tissue
 section. `region` and `instance_id` may identify its footprint in a
 `SpatialShapes` element. Observations record the source name independently of
 their coordinates, so source selection remains distinct from geometric ROI
-selection in overlapping acquisitions.
+selection in overlapping acquisitions. `attributes` retains structured
+technology-specific identity needed for lossless export, such as a vendor FOV
+number.
 
 # See also
 [`sources`](@ref), [`source`](@ref), [`SpatialDatasetView`](@ref)
@@ -109,11 +116,13 @@ struct AcquisitionSource
     name           :: String
     region_element :: Union{Nothing,String}
     region_id      :: Union{Nothing,Int32}
+    attributes     :: Dict{String,Any}
 end
 
 function AcquisitionSource(name::AbstractString;
                            region::Union{Nothing,AbstractString}=nothing,
-                           instance_id::Union{Nothing,Integer}=nothing)
+                           instance_id::Union{Nothing,Integer}=nothing,
+                           attributes::AbstractDict=Dict{String,Any}())
     (region === nothing) == (instance_id === nothing) || throw(ArgumentError(
         "region and instance_id must either both be supplied or both be omitted",
     ))
@@ -121,34 +130,12 @@ function AcquisitionSource(name::AbstractString;
         String(name),
         region === nothing ? nothing : String(region),
         instance_id === nothing ? nothing : Int32(instance_id),
+        deepcopy(Dict{String,Any}(
+            string(key) => value for (key, value) in pairs(attributes)
+        )),
     )
 end
 
-"""
-    SpatialDataset(; path=nothing, metadata=Dict())
-
-Root container for a spatial omics experiment.
-
-Holds named collections of spatial elements (`SpatialPoints`, `SpatialShapes`,
-`SpatialImage`, `SpatialLabels`), a graph of `CoordinateSystem` nodes connected
-by `AbstractTransformation` edges, named `SpatialRelation` objects, and free-form
-metadata. Its native Zarr layout is versioned by SpatialOmics; external
-SpatialData stores are handled as an import boundary.
-
-Every dataset has a `BackingStore` Zarr directory. When `path` is `nothing`, a
-temporary directory is used and cleaned up automatically. Mutations are staged
-in memory and reported by [`dirty`](@ref); call [`save!`](@ref) to make them
-durable. Closing a dirty dataset requires an explicit save or discard.
-
-```julia
-ds = SpatialDataset()                          # temp-backed
-ds = SpatialDataset(path="/data/exp.zarr")     # persistent-backed
-```
-
-# See also
-[`BackingStore`](@ref), [`with_dataset`](@ref), [`keep!`](@ref),
-[`elements`](@ref), [`coord_systems`](@ref), [`relations`](@ref)
-"""
 # ── Backed metadata dict ──────────────────────────────────────────────────────
 
 """
@@ -190,6 +177,31 @@ Base.length(bm::BackedMetadata)                = length(bm.data)
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
 
+"""
+    SpatialDataset(; path=nothing, metadata=Dict())
+
+Root container for a spatial omics experiment.
+
+Holds named collections of spatial elements (`SpatialPoints`, `SpatialShapes`,
+`SpatialImage`, `SpatialLabels`), a graph of `CoordinateSystem` nodes connected
+by `AbstractTransformation` edges, named `SpatialRelation` objects, and free-form
+metadata. Its native Zarr layout is versioned by SpatialOmics; external
+SpatialData stores are handled as an import boundary.
+
+Every dataset has a `BackingStore` Zarr directory. When `path` is `nothing`, a
+temporary directory is used and cleaned up automatically. Mutations are staged
+in memory and reported by [`dirty`](@ref); call [`save!`](@ref) to make them
+durable. Closing a dirty dataset requires an explicit save or discard.
+
+```julia
+ds = SpatialDataset()                          # temp-backed
+ds = SpatialDataset(path="/data/exp.zarr")     # persistent-backed
+```
+
+# See also
+[`BackingStore`](@ref), [`with_dataset`](@ref), [`keep!`](@ref),
+[`elements`](@ref), [`coord_systems`](@ref), [`relations`](@ref)
+"""
 mutable struct SpatialDataset
     elements      :: OrderedDict{String, Any}
     coord_systems :: OrderedDict{String, CoordinateSystem}
@@ -412,6 +424,17 @@ function source(ds::SpatialDataset, name::AbstractString)
     ))
     ds.sources[key]
 end
+
+"""
+    source_attributes(source)
+    source_attributes(ds, name)
+
+Return a copy of the structured technology-specific attributes registered for
+an acquisition source.
+"""
+source_attributes(acquisition::AcquisitionSource) = deepcopy(acquisition.attributes)
+source_attributes(ds::SpatialDataset, name::AbstractString) =
+    source_attributes(source(ds, name))
 
 """
     transform(ds, src, dst) → AbstractTransformation

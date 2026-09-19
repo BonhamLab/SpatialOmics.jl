@@ -8,6 +8,7 @@ dataset changes are persisted with [`save!`](@ref).
 ```@docs
 SpatialDataZarr
 CosMx
+native_store_version
 ```
 
 ## Reading
@@ -25,10 +26,15 @@ ds = read(CosMx(), "/path/to/cosmx_export/")
 ds = read(CosMx(morphology_dir="/path/to/Morphology2D"), "/path/to/export/")
 ```
 
+Native stores carry an explicit schema version. Stores written before versioning,
+or with an unsupported version, are rejected with a rebuild instruction; reads never
+silently migrate or reinterpret them. Use `native_store_version(path)` to inspect a
+store before opening it. A future migration API can upgrade a store only when called
+explicitly.
+
 ## Writing
 
 ```@docs
-save!
 write!
 ```
 

@@ -20,16 +20,16 @@ Sequence
 ## Transformation constructors
 
 ```@docs
-translation
-scaling
-rotation
-flip_y
+SpatialOmics.translation
+SpatialOmics.scaling
+SpatialOmics.rotation
+SpatialOmics.flip_y
 ```
 
 ## Operations
 
 ```@docs
-compose
+SpatialOmics.compose
 apply
 apply!
 resolve

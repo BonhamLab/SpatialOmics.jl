@@ -179,6 +179,28 @@ _subset_feature_columns(nt::NamedTuple, idx) =
     NamedTuple{keys(nt)}(map(v -> v[idx], values(nt)))
 
 """
+    with_instance_ids(points, ids) -> SpatialPoints
+
+Return a detached copy of `points` with replacement instance assignments.
+Coordinates, feature encodings, auxiliary feature columns, acquisition origins,
+and the coordinate system are preserved. `ids` must contain one value per point.
+
+This is useful when importing assignments from an external segmentation tool
+without rebuilding a point collection field by field.
+"""
+function with_instance_ids(pts::SpatialPoints{T}, ids::AbstractVector{<:Integer}) where T
+    length(ids) == length(pts) || throw(DimensionMismatch(
+        "instance IDs have length $(length(ids)); expected $(length(pts))",
+    ))
+    SpatialPoints{T}(
+        copy(pts.coords), copy(pts.feature_id), copy(pts.feature_codebook),
+        Int32.(ids), _subset_feature_columns(pts.feature_columns, :),
+        isnothing(pts.origin_id) ? nothing : copy(pts.origin_id),
+        copy(pts.origin_codebook), pts.coord_system, nothing,
+    )
+end
+
+"""
     coord_system(el) → String
 
 Return the name of the coordinate system that `el` belongs to.
@@ -369,6 +391,10 @@ function _transform_geom(t::AbstractTransformation, poly::Polygon)
     Polygon(ext, holes)
 end
 
+function _transform_geom(t::AbstractTransformation, multi::MultiPolygon)
+    MultiPolygon([_transform_geom(t, polygon) for polygon in GeoInterface.getgeom(multi)])
+end
+
 # ── apply / apply! on SpatialPoints ──────────────────────────────────────────
 
 function apply(t::AbstractTransformation, pts::SpatialPoints{T}) where T
@@ -529,6 +555,14 @@ function Base.getindex(pts::SpatialPoints{T}, gene::String) where T
     pts[mask]
 end
 
+function Base.getindex(pts::SpatialPoints, genes::AbstractVector{<:AbstractString})
+    selected = Set(String.(genes))
+    selected_indices = Set(
+        Int32(index) for (index, gene) in pairs(pts.feature_codebook) if gene in selected
+    )
+    pts[BitVector(id in selected_indices for id in pts.feature_id)]
+end
+
 # ── top_features ──────────────────────────────────────────────────────────────
 
 """
@@ -552,9 +586,10 @@ end
 # ── count_per_instance ────────────────────────────────────────────────────────
 
 """
-    count_per_instance(pts) → Dict{Int32, Int}
+    count_per_instance(pts; feature=nothing) → Dict{Int32, Int}
 
 Return a dictionary mapping each non-zero instance ID to its observation count.
+When `feature` is supplied, count only observations with that feature label.
 
 Unassigned points (`instance_id == 0`) are excluded. Useful for computing
 transcript counts per cell or density metrics.
@@ -562,9 +597,20 @@ transcript counts per cell or density metrics.
 # See also
 [`instance_id`](@ref), [`top_features`](@ref)
 """
-function count_per_instance(pts::SpatialPoints)
+function count_per_instance(pts::SpatialPoints; feature::Union{Nothing,AbstractString}=nothing)
+    feature_index = if feature === nothing
+        nothing
+    else
+        index = findfirst(==(feature), pts.feature_codebook)
+        index === nothing && throw(ArgumentError(
+            "feature $(repr(feature)) not found; available: $(pts.feature_codebook)",
+        ))
+        Int32(index)
+    end
     counts = Dict{Int32, Int}()
-    for id in pts.instance_id
+    for index in eachindex(pts.instance_id)
+        feature_index === nothing || pts.feature_id[index] == feature_index || continue
+        id = pts.instance_id[index]
         id == Int32(0) && continue
         counts[id] = get(counts, id, 0) + 1
     end

@@ -1,67 +1,30 @@
 # make_fixtures.jl — developer script to create committable test fixtures
 #
 # Run from the SpatialOmics.jl repo root:
-#   julia --project=. test/make_fixtures.jl
+#   julia --project=docs/heavy test/make_fixtures.jl /path/to/xenium.zarr /path/to/visium.zarr
 #
 # Requires the full datasets downloaded from the SpatialData datasets page:
-#   XENIUM_SRC  — Xenium Mouse Brain example (xenium_ex.zarr)
+#   XENIUM_SRC  — Xenium FFPE Human Lung Cancer example (xenium_ex.zarr)
 #   VISIUM_SRC  — Visium HD Mouse Small Intestine (visium_ex.zarr)
 #
-# Workflow:
-#   1. Run the script once — it saves overview figures and exits.
-#   2. Open the overview PNGs (written to docs/src/assets/), pick a region.
-#   3. Fill in the coordinate constants below (STEP 2 blocks).
-#   4. Re-run — fixture zarrs are written to test/data/.
+# The script writes overview figures, native fixtures, and ROI figures. To
+# select a different region, inspect the overview assets, update the coordinate
+# constants below, and run it again.
 
 using SpatialOmics
 using CairoMakie
-using StaticArrays
 
-const XENIUM_SRC = "/home/kevin/Repos/stx_dev/test_data/experiments/xenium_ex.zarr"
-const VISIUM_SRC = "/home/kevin/Repos/stx_dev/test_data/experiments/visium_ex.zarr"
+length(ARGS) == 2 || error(
+    "usage: julia --project=docs/heavy test/make_fixtures.jl XENIUM_ZARR VISIUM_ZARR",
+)
+
+const XENIUM_SRC = abspath(ARGS[1])
+const VISIUM_SRC = abspath(ARGS[2])
 const XENIUM_OUT = joinpath(@__DIR__, "data", "xenium_small.zarr")
 const VISIUM_OUT = joinpath(@__DIR__, "data", "visium_small.zarr")
 const ASSETS     = joinpath(@__DIR__, "..", "docs", "src", "assets")
 
 mkpath(ASSETS)
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-# Maps a physical-space point back to pixel coordinates using the image transform.
-function _to_pixel(t::Affine, x::Real, y::Real)
-    m_inv = inv(Matrix(t.matrix))
-    v = m_inv * [Float64(x), Float64(y), 1.0]
-    (v[1], v[2])
-end
-_to_pixel(::Identity, x::Real, y::Real) = (Float64(x), Float64(y))
-
-# Clamps a pixel range to valid array bounds (1-based, inclusive).
-_px_clamp(lo, hi, n) = (clamp(floor(Int, min(lo, hi)) + 1, 1, n),
-                         clamp(ceil(Int,  max(lo, hi)),     1, n))
-
-# Adjust pixel_to_cs for a crop: new pixel [1,1] = old pixel [xlo, ylo].
-function _shift_origin(t::Affine, xlo::Int, ylo::Int)
-    dx, dy = Float64(xlo - 1), Float64(ylo - 1)
-    S = SMatrix{3,3,Float64}(1, 0, 0, 0, 1, 0, dx, dy, 1)
-    Affine(t.matrix * S, t.src, t.dst)
-end
-_shift_origin(t::Identity, ::Int, ::Int) = t
-
-# Crop a SpatialLabels to a pixel rectangle and filter the instance_map.
-<<<<<<< HEAD
-# axes are (:x, :y), so dim1=x, dim2=y — index as [xlo:xhi, ylo:yhi].
-function crop_labels(lbl::SpatialLabels, ylo::Int, yhi::Int, xlo::Int, xhi::Int)
-    raw = Array(lbl.data[xlo:xhi, ylo:yhi])
-=======
-function crop_labels(lbl::SpatialLabels, ylo::Int, yhi::Int, xlo::Int, xhi::Int)
-    raw = Array(lbl.data[ylo:yhi, xlo:xhi])
->>>>>>> fix
-    present = Set(raw)
-    imap = Dict(k => v for (k, v) in lbl.instance_map if k in present)
-    p2cs = _shift_origin(lbl.pixel_to_cs, xlo, ylo)
-    SpatialLabels(raw; axes=lbl.axes, instance_map=imap,
-                  coord_system=lbl.coord_system, pixel_to_cs=p2cs)
-end
 
 # ══════════════════════════════════════════════════════════════════════════════
 # XENIUM
@@ -73,8 +36,7 @@ isdir(XENIUM_SRC) || error("Xenium source not found: $XENIUM_SRC")
 xen = read(SpatialDataZarr(), XENIUM_SRC)
 @info "Loaded" keys(elements(xen))
 
-# ── STEP 1: Overview figure ───────────────────────────────────────────────────
-# Run this block first, inspect xenium_overview.png, then fill in coordinates.
+# ── Overview figure ───────────────────────────────────────────────────────────
 
 let
     fig = Figure(size=(900, 900))
@@ -89,7 +51,7 @@ let
     @info "Saved overview → $path — inspect to pick XMIN/XMAX/YMIN/YMAX (coordinates are in µm)"
 end
 
-# ── STEP 2: Fill in these values after viewing the overview ───────────────────
+# ── Fixture region ────────────────────────────────────────────────────────────
 # Choose a ~200µm × 200µm region with good transcript density and visible cells.
 # coord_system must match points(xen,"transcripts").coord_system.
 
@@ -116,16 +78,7 @@ else
     # Image: view() returns a lazily cropped SpatialImage with adjusted pixel_to_cs
     sub["morphology_focus"] = images(roi, "morphology_focus")
 
-    # Labels: manual crop (view on SpatialDatasetView returns labels as-is)
-    img_ref = images(xen, "morphology_focus")
-    lbl     = labels(xen, "cell_labels")
-    ny, nx  = size(lbl.data, findfirst(==(:y), lbl.axes)),
-              size(lbl.data, findfirst(==(:x), lbl.axes))
-    px1 = _to_pixel(img_ref.pixel_to_cs, XEN_XMIN, XEN_YMIN)
-    px2 = _to_pixel(img_ref.pixel_to_cs, XEN_XMAX, XEN_YMAX)
-    xlo, xhi = _px_clamp(px1[1], px2[1], nx)
-    ylo, yhi = _px_clamp(px1[2], px2[2], ny)
-    sub["cell_labels"] = crop_labels(lbl, ylo, yhi, xlo, xhi)
+    sub["cell_labels"] = labels(roi, "cell_labels")
 
     rm(XENIUM_OUT; recursive=true, force=true)
     save!(sub; path=XENIUM_OUT)
@@ -143,6 +96,7 @@ else
     tightlimits!(ax2)
     save(joinpath(ASSETS, "xenium_roi.png"), fig2)
     @info "Saved ROI figure → $(joinpath(ASSETS, "xenium_roi.png"))"
+    close(sub)
 end
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -167,7 +121,7 @@ let
     n   = length(geometries(shp))
     idx = n > 5_000 ? rand(1:n, 5_000) : 1:n
     poly!(ax, SpatialShapes(geometries(shp)[idx]; instance_id=instance_id(shp)[idx],
-                            coord_system=shp.coord_system);
+                            coord_system=coord_system(shp));
           color=:steelblue, strokewidth=0)
     tightlimits!(ax)
     path = joinpath(ASSETS, "visium_overview.png")
@@ -179,7 +133,7 @@ const VIS_XMIN = 3000.0
 const VIS_XMAX = 3500.0
 const VIS_YMIN = 2000.0
 const VIS_YMAX = 2500.0
-const VIS_CS   = shapes(vis, VIS_SHAPES).coord_system  # auto-detected from element
+const VIS_CS   = coord_system(shapes(vis, VIS_SHAPES))
 
 if VIS_XMAX == VIS_XMIN
     @info "Visium extent not set — fill in VIS_XMIN/XMAX/YMIN/YMAX and re-run"
@@ -207,4 +161,8 @@ else
     tightlimits!(ax2)
     save(joinpath(ASSETS, "visium_roi.png"), fig2)
     @info "Saved ROI figure → $(joinpath(ASSETS, "visium_roi.png"))"
+    close(sub)
 end
+
+close(xen)
+close(vis)

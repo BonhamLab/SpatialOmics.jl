@@ -224,6 +224,18 @@ end
         @test features(pts)[feature_ids(pts)[1]] == "Actb"
         @test feature_ids(pts)[1] == feature_ids(pts)[3]
         @test feature_ids(pts)[2] != feature_ids(pts)[1]
+
+        assigned = SpatialPoints(
+            [Point2f(1, 1), Point2f(2, 2), Point2f(3, 3)];
+            feature_id=Int32[1, 2, 1],
+            feature_codebook=["Actb", "Gapdh"],
+            instance_id=Int32[1, 1, 2],
+        )
+        @test count_per_instance(assigned) == Dict(Int32(1) => 2, Int32(2) => 1)
+        @test count_per_instance(assigned; feature="Actb") ==
+              Dict(Int32(1) => 1, Int32(2) => 1)
+        @test features(assigned[["Gapdh"]]) == features(assigned)
+        @test coords(assigned[["Gapdh"]]) == [Point2f(2, 2)]
     end
 
     @testset "SpatialPoints — GeoInterface" begin
@@ -1198,6 +1210,8 @@ end
             @test origin_ids(shp) !== nothing
             @test length(features(pts, :z)) == length(pts)
             @test length(features(pts, :CellComp)) == length(pts)
+            @test length(features(pts, :fov)) == length(pts)
+            @test length(features(pts, :cell_ID)) == length(pts)
             @test !haskey(ds.metadata, "transcripts_annotations")
             first_source = first(sources(ds))
             @test length(points(view(ds, first_source), "transcripts")) > 0
@@ -1245,6 +1259,58 @@ end
         @test nobs(rel) == 6
         @test rel.dst_ids == Int32[1,1,2,2,3,3]
         @test rel.weights === nothing
+    end
+
+    @testset "multipolygon point joins preserve object identity" begin
+        left = Polygon([
+            Point2f(0, 0), Point2f(2, 0), Point2f(2, 2), Point2f(0, 2), Point2f(0, 0),
+        ])
+        right = Polygon([
+            Point2f(10, 0), Point2f(12, 0), Point2f(12, 2), Point2f(10, 2), Point2f(10, 0),
+        ])
+        multi_cells = SpatialShapes(
+            [MultiPolygon([left, right])]; instance_id=Int32[41],
+        )
+        multi_points = SpatialPoints(
+            [Point2f(1, 1), Point2f(11, 1), Point2f(6, 1)];
+            feature_id=Int32[1, 1, 1], feature_codebook=["GeneA"],
+        )
+
+        membership = analyze(Membership(), multi_points, multi_cells)
+        @test source_ids(membership) == Int32[1, 2]
+        @test destination_ids(membership) == Int32[41, 41]
+        @test analyze(Expression(), multi_points, multi_cells).weights == Float32[2;;]
+
+        overlapping_parts = SpatialShapes(
+            [MultiPolygon([left, left])]; instance_id=Int32[42],
+        )
+        duplicate_safe = analyze(Membership(), multi_points, overlapping_parts)
+        @test source_ids(duplicate_safe) == Int32[1]
+        @test destination_ids(duplicate_safe) == Int32[42]
+    end
+
+    @testset "multipolygon storage roundtrip" begin
+        left = Polygon([
+            Point2f(0, 0), Point2f(2, 0), Point2f(2, 2), Point2f(0, 2), Point2f(0, 0),
+        ])
+        right = Polygon([
+            Point2f(10, 0), Point2f(12, 0), Point2f(12, 2), Point2f(10, 2), Point2f(10, 0),
+        ])
+        mktempdir() do path
+            ds = SpatialDataset()
+            ds["objects"] = SpatialShapes(
+                [MultiPolygon([left, right])]; instance_id=Int32[7],
+            )
+            save!(ds; path)
+            close(ds)
+
+            stored = read(SpatialDataZarr(), path)
+            object = only(geometries(shapes(stored, "objects")))
+            @test object isa MultiPolygon
+            @test GeoInterface.ngeom(object) == 2
+            @test instance_id(shapes(stored, "objects")) == Int32[7]
+            close(stored)
+        end
     end
 
     # ── default dispatch ──────────────────────────────────────────────────────

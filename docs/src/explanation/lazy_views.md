@@ -31,8 +31,9 @@ for visualisation — `SpatialShapes(ext)` produces a rectangular polygon.
 ## SpatialElementView and SpatialDatasetView
 
 `view(el, roi)` returns a [`SpatialElementView`](@ref) — a struct holding a
-reference to the parent element and the ROI. No data is read, no arrays are
-allocated. The element's accessors — [`coords`](@ref), [`geometries`](@ref), [`feature_ids`](@ref),
+reference to the parent element and the ROI. Constructing the wrapper does not
+copy the spatial element; its selection mask is computed when filtered data are
+requested. The element's accessors — [`coords`](@ref), [`geometries`](@ref), [`feature_ids`](@ref),
 [`instance_id`](@ref), [`count_per_instance`](@ref) — are all defined on [`SpatialElementView`](@ref)
 and apply the filter on each call.
 
@@ -52,6 +53,20 @@ the footprint of `fov_2_px` without becoming an observation from FOV 2.
 fov = view(ds, "fov_2_px")  # provenance: observations acquired in FOV 2
 roi = view(ds, polygon)      # geometry: every observation inside the polygon
 ```
+
+Multiple sources use ordinary Julia selection semantics: selecting FOVs 1 and
+5 returns those two sources, not the rectangular region bounded by them.
+
+```julia
+selected = view(ds, ["fov_1_px", "fov_5_px"])
+tx = points(selected, "transcripts")
+tiles = images(selected, "morphology")
+```
+
+`tiles` is a [`SpatialRasterTiles`](@ref) collection of positioned image crops.
+Plotting it renders each crop in the shared coordinate system without allocating
+pixels in the gap between disconnected FOVs. Creating a dense bounding canvas
+is a separate, explicit operation.
 
 Points and shapes store compact per-observation origin IDs. Images and labels
 are cropped to the registered source footprint. If a vector element predates

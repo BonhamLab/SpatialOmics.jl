@@ -15,7 +15,10 @@ using GeometryBasics: Point2f, Polygon
             origins=["fov_a", "fov_b"],
             coord_system="global",
         )
-        push!(ds, AcquisitionSource("fov_a"; region="fovs", instance_id=1))
+        push!(ds, AcquisitionSource(
+            "fov_a"; region="fovs", instance_id=1,
+            attributes=Dict("native_id" => 1),
+        ))
         push!(ds, AcquisitionSource("fov_b"; region="fovs", instance_id=2))
         ds
     end
@@ -35,6 +38,10 @@ using GeometryBasics: Point2f, Polygon
             )
 
             @test sources(ds) == ["fov_a", "fov_b"]
+            @test source_attributes(ds, "fov_a")["native_id"] == 1
+            attributes = source_attributes(ds, "fov_a")
+            attributes["native_id"] = 2
+            @test source_attributes(ds, "fov_a")["native_id"] == 1
             @test source(ds, SubString("xfov_a", 2)) == source(ds, "fov_a")
             fov_a_points = points(view(ds, "fov_a"), "transcripts")
             @test length(fov_a_points) == 1
@@ -44,9 +51,21 @@ using GeometryBasics: Point2f, Polygon
             @test length(shapes(view(ds, "fov_a"), "cells")) == 1
             @test length(shapes(view(ds, "fov_b"), "cells")) == 1
 
+            both = view(ds, ["fov_a", "fov_b"])
+            @test length(points(both, "transcripts")) == 3
+            @test length(shapes(both, "cells")) == 2
+            @test only(parentindices(points(view(ds, ["fov_a"]), "transcripts"))) == [1]
+
             overlap = SpatialExtent(6, 8, 4, 6; coord_system="global")
             @test length(points(view(ds, overlap), "transcripts")) == 2
             @test length(shapes(view(ds, overlap), "cells")) == 2
+
+            selected = points(view(ds, "fov_b"), "transcripts")
+            @test only(parentindices(selected)) == [2, 3]
+            reassigned = with_instance_ids(collect(selected), Int32[10, 11])
+            @test instance_id(reassigned) == Int32[10, 11]
+            @test origins(reassigned) == origins(selected)
+            @test origin_ids(reassigned) == origin_ids(selected)
         finally
             close(ds; discard=true)
         end
@@ -88,6 +107,7 @@ using GeometryBasics: Point2f, Polygon
             stored = read(SpatialDataZarr(), path)
             try
                 @test sources(stored) == ["fov_a", "fov_b"]
+                @test source_attributes(stored, "fov_a")["native_id"] == 1
                 @test source(points(stored, "transcripts"), 2) == "fov_b"
                 @test length(points(view(stored, "fov_b"), "transcripts")) == 1
             finally
@@ -109,6 +129,24 @@ using GeometryBasics: Point2f, Polygon
             )
             @test size(images(view(ds, "fov_a"), "image")) == (10, 10)
             @test size(labels(view(ds, "fov_b"), "labels")) == (10, 10)
+
+            selected_images = images(view(ds, ["fov_a", "fov_b"]), "image")
+            @test selected_images isa SpatialRasterTiles
+            @test length(selected_images) == 2
+            @test size(selected_images[1]) == (10, 10)
+            @test size(selected_images[2]) == (10, 10)
+            @test sources(selected_images) == ["fov_a", "fov_b"]
+
+            scaled_images = scaleminmax(selected_images)
+            @test all(tile -> !isnothing(tile.display_transform), scaled_images)
+            composite = colorview(RGB, scaled_images, scaled_images, scaled_images)
+            @test composite isa SpatialRasterTiles
+            @test first(composite) isa SpatialImageColorView
+            @test sources(composite) == sources(selected_images)
+
+            selected_labels = labels(view(ds, ["fov_a", "fov_b"]), "labels")
+            @test selected_labels isa SpatialRasterTiles
+            @test length(selected_labels) == 2
         finally
             close(ds; discard=true)
         end
@@ -116,6 +154,9 @@ using GeometryBasics: Point2f, Polygon
 
     @testset "constructor validation" begin
         @test_throws ArgumentError AcquisitionSource("bad"; region="fovs")
+        @test_throws DimensionMismatch SpatialRasterTiles(
+            SpatialImage[SpatialImage(zeros(Float32, 2, 2))], String[],
+        )
         @test_throws DimensionMismatch SpatialPoints(
             [Point2f(1, 1), Point2f(2, 2)]; origins=["only_one"],
         )

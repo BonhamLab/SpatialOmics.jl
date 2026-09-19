@@ -10,6 +10,7 @@ These types and functions support image display. Makie plot verbs (`heatmap!`,
 ```@docs
 SpatialImage
 SpatialLabels
+SpatialRasterTiles
 SpatialImageColorView
 ```
 
@@ -22,6 +23,7 @@ channel
 scaleminmax
 colorview
 build_pyramid!
+ensure_pyramid!
 data
 ```
 

@@ -165,4 +165,25 @@ using GeometryBasics: Point2f
         @test occursin("unsaved", sprint(show, MIME("text/plain"), ds))
         close(ds; discard=true)
     end
+
+    @testset "native stores require an explicit format version" begin
+        mktempdir() do path
+            open(joinpath(path, "zarr.json"), "w") do io
+                write(io, """{"zarr_format":3,"node_type":"group","attributes":{}}""")
+            end
+            open(joinpath(path, "spatialomics_meta.json"), "w") do io
+                write(io, """{"coord_systems":[]}""")
+            end
+            @test native_store_version(path) === nothing
+            error = try
+                read(SpatialDataZarr(), path)
+                nothing
+            catch exception
+                exception
+            end
+            @test error isa ArgumentError
+            @test occursin("rebuild", sprint(showerror, error))
+            @test occursin("does not upgrade stores automatically", sprint(showerror, error))
+        end
+    end
 end

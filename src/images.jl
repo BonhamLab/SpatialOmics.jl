@@ -102,6 +102,47 @@ end
 Base.size(img::SpatialImage)   = size(img.data)
 Base.length(img::SpatialImage) = length(img.data)
 
+"""
+    SpatialRasterTiles
+
+Positioned raster pieces selected from non-contiguous acquisition sources.
+Each tile retains its own pixel-to-coordinate-system transform. The collection
+does not allocate or represent pixels in gaps between tiles; call `collect` on
+individual tiles when dense arrays are required.
+"""
+struct SpatialRasterTiles{R} <: AbstractVector{R}
+    tiles   :: Vector{R}
+    sources :: Vector{String}
+
+    function SpatialRasterTiles(tiles::Vector{R}, sources::Vector{String}) where R
+        length(tiles) == length(sources) || throw(DimensionMismatch(
+            "raster tile count $(length(tiles)) does not match source count $(length(sources))",
+        ))
+        new{R}(tiles, sources)
+    end
+end
+
+Base.size(tiles::SpatialRasterTiles) = (length(tiles.tiles),)
+Base.length(tiles::SpatialRasterTiles) = length(tiles.tiles)
+Base.getindex(tiles::SpatialRasterTiles, index::Int) = tiles.tiles[index]
+Base.IndexStyle(::Type{<:SpatialRasterTiles}) = IndexLinear()
+
+"""
+    sources(tiles::SpatialRasterTiles) -> Vector{String}
+
+Return the acquisition source corresponding to each positioned raster tile.
+"""
+sources(tiles::SpatialRasterTiles) = copy(tiles.sources)
+
+function coord_system(tiles::SpatialRasterTiles)
+    isempty(tiles) && return ""
+    systems = unique(coord_system(tile) for tile in tiles)
+    length(systems) == 1 || throw(ArgumentError(
+        "raster tiles use multiple coordinate systems: $(collect(systems))",
+    ))
+    only(systems)
+end
+
 # ── Pyramid ────────────────────────────────────────────────────────────────────
 
 function _spatial_dims(axes::NTuple{N, Symbol}) where N
@@ -252,6 +293,10 @@ function channel(img::SpatialImage, ch::String)
     channel(img, i)
 end
 
+channel(tiles::SpatialRasterTiles{<:SpatialImage}, ch) = SpatialRasterTiles(
+    [channel(tile, ch) for tile in tiles], copy(tiles.sources),
+)
+
 # ── scaleminmax — lazy display-time intensity rescaling ────────────────────────
 
 """
@@ -275,6 +320,30 @@ function scaleminmax(img::SpatialImage)
                  coord_system=img.coord_system, pixel_to_cs=img.pixel_to_cs,
                  pyramid=img.pyramid,
                  display_transform=scaleminmax(mn, mx))
+end
+
+function scaleminmax(tiles::SpatialRasterTiles{<:SpatialImage})
+    isempty(tiles) && return tiles
+    ranges = map(tiles) do tile
+        source = isempty(tile.pyramid) ? tile.data : tile.pyramid[end]
+        extrema(Array(source))
+    end
+    minimum_value = Float32(minimum(first, ranges))
+    maximum_value = Float32(maximum(last, ranges))
+    transform = scaleminmax(minimum_value, maximum_value)
+    scaled = [
+        SpatialImage(
+            tile.data;
+            axes=tile.axes,
+            channel_names=tile.channel_names,
+            coord_system=tile.coord_system,
+            pixel_to_cs=tile.pixel_to_cs,
+            pyramid=tile.pyramid,
+            display_transform=transform,
+        )
+        for tile in tiles
+    ]
+    SpatialRasterTiles(scaled, copy(tiles.sources))
 end
 
 # ── pyramid_level — internal helper (not exported) ─────────────────────────────
@@ -368,6 +437,18 @@ function colorview(CT::Type{<:Colorant}, imgs::SpatialImage...)
     ]
     SpatialImageColorView{C, C, 2}(cdata, cpyr, C, nothing,
                                    imgs[1].coord_system, imgs[1].pixel_to_cs, imgs[1].axes)
+end
+
+function colorview(CT::Type{<:Colorant}, collections::SpatialRasterTiles...)
+    isempty(collections) && throw(ArgumentError("at least one raster collection is required"))
+    expected_sources = first(collections).sources
+    all(collection -> collection.sources == expected_sources, collections) ||
+        throw(ArgumentError("raster collections must contain the same sources in the same order"))
+    tiles = [
+        colorview(CT, (collection[index] for collection in collections)...)
+        for index in eachindex(first(collections))
+    ]
+    SpatialRasterTiles(tiles, copy(expected_sources))
 end
 
 function _spatial_colorview(CT::Type{<:Colorant}, img::SpatialImage{T,N}) where {T,N}

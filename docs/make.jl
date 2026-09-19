@@ -18,8 +18,15 @@ makedocs(
             "explanation/lazy_views.md",
         ],
         "Tutorials" => [
+            "tutorials/index.md",
+            "tutorials/building_dataset.md",
+            "tutorials/coordinate_workflow.md",
+            "tutorials/source_roi_selection.md",
+            "tutorials/expression_summaries.md",
+            "tutorials/persistence.md",
             "tutorials/xenium.md",
             "tutorials/visium.md",
+            "tutorials/custom_starmap_reader.md",
         ],
         "Reference" => [
             "reference/dataset.md",

@@ -1,3 +1,6 @@
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 SpatialOmics = "7c9a2e4e-8f1d-4a6b-b84c-3e8a9f2d1c5e"
+
+[sources]
+SpatialOmics = {path = ".."}

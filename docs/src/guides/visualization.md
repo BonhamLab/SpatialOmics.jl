@@ -33,8 +33,9 @@ arguments (`color`, `strokewidth`, `markersize`, etc.).
 
 `SpatialImage` objects loaded from OME-Zarr carry pre-computed pyramid levels
 as lazy `DiskArray`-backed arrays. `image!(ax, img)` selects the correct
-resolution level on every zoom or pan event. No pixels are loaded until
-a viewport is established.
+resolution level as the visible region changes. Initial plot construction may
+read a selected pyramid level; it does not automatically materialise the full
+resolution image.
 
 ```julia
 img = images(ds, "morphology_focus")
@@ -55,8 +56,9 @@ dapi = channel(img, 1)           # or channel(img, "DAPI")
 image!(ax, scaleminmax(dapi))
 ```
 
-`scaleminmax` samples the intensity range from the coarsest pyramid level and
-attaches a min-max display transform applied at render time — no copy is made.
+`scaleminmax` reads the coarsest pyramid level to estimate the intensity range,
+then attaches a min-max display transform applied at render time. It does not
+copy the full-resolution image.
 
 ## Lazy spatial views
 
