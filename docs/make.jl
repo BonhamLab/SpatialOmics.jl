@@ -49,7 +49,7 @@ makedocs(
 
 if get(ENV, "CI", nothing) == "true"
     deploydocs(
-        repo         = Documenter.Remotes.GitHub("BonhamLab", "SpatialOmics.jl"),
+        repo         = "githum.com/BonhamLab/SpatialOmics.jl.git",
         target       = "build",
         push_preview = true,
     )
