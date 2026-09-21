@@ -49,7 +49,7 @@ makedocs(
 
 if get(ENV, "CI", nothing) == "true"
     deploydocs(
-        repo         = "githum.com/BonhamLab/SpatialOmics.jl.git",
+        repo         = "github.com/BonhamLab/SpatialOmics.jl.git",
         target       = "build",
         push_preview = true,
     )
