@@ -1,5 +1,16 @@
 # Place an FOV in slide coordinates
 
+```@setup coordinate-workflow
+using CairoMakie
+using Markdown
+CairoMakie.activate!(type="svg")
+set_theme!(Theme(
+    fontsize=15,
+    Figure=(; backgroundcolor=:white),
+    Axis=(; xgridvisible=false, ygridvisible=false),
+))
+```
+
 Imaging assays often report transcript positions in FOV-local pixels while
 slide overlays use a physical global coordinate system. SpatialOmics keeps
 those spaces named and resolves the transformation path explicitly.
@@ -33,7 +44,8 @@ element and leaves the local data unchanged.
 
 ```@example coordinate-workflow
 local_transcripts = SpatialPoints(
-    [Point2f(0, 0), Point2f(20, 40)];
+    [Point2f(0, 0), Point2f(20, 40), Point2f(60, 20),
+     Point2f(80, 70), Point2f(100, 50)];
     coord_system="fov_1_px",
 )
 
@@ -45,6 +57,30 @@ slide_transcripts = apply(to_slide, local_transcripts)
     slide=coords(slide_transcripts),
     destination=coord_system(slide_transcripts),
 )
+```
+
+The same observations retain their identity as the FOV is scaled from pixels
+to micrometres and translated into its slide position.
+
+```@eval coordinate-workflow
+point_colors = Makie.wong_colors()[1:length(local_transcripts)]
+figure = Figure(size=(820, 400))
+local_axis = Axis(figure[1, 1]; title="FOV-local pixels",
+                  xlabel="x (px)", ylabel="y (px)")
+slide_axis = Axis(figure[1, 2]; title="Placed on slide",
+                  xlabel="x (µm)", ylabel="y (µm)")
+scatter!(local_axis, local_transcripts; color=point_colors, markersize=14)
+scatter!(slide_axis, slide_transcripts; color=point_colors, markersize=14)
+poly!(local_axis, [Rect2f(0, 0, 110, 80)]; color=(:steelblue, 0.08),
+      strokecolor=:steelblue, strokewidth=2)
+poly!(slide_axis, [Rect2f(1000, 250, 55, 40)]; color=(:steelblue, 0.08),
+      strokecolor=:steelblue, strokewidth=2)
+Label(figure[2, 1:2], "scale × 0.5, then translate + (1000, 250)",
+      tellheight=true, justification=:center)
+xlims!(local_axis, -8, 118); ylims!(local_axis, -8, 88)
+xlims!(slide_axis, 996, 1059); ylims!(slide_axis, 246, 294)
+save("coordinate-workflow.svg", figure)
+Markdown.parse("![FOV coordinates before and after transformation](coordinate-workflow.svg)")
 ```
 
 Affine edges can also be resolved in reverse. Unsupported paths fail instead

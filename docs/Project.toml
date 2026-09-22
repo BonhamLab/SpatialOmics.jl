@@ -1,6 +1,11 @@
 [deps]
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 SpatialOmics = "7c9a2e4e-8f1d-4a6b-b84c-3e8a9f2d1c5e"
 
 [sources]
 SpatialOmics = {path = ".."}
+
+[compat]
+CairoMakie = "0.15"
+Documenter = "1.19"

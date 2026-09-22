@@ -1,5 +1,16 @@
 # Build a spatial dataset
 
+```@setup building-dataset
+using CairoMakie
+using Markdown
+CairoMakie.activate!(type="svg")
+set_theme!(Theme(
+    fontsize=15,
+    Figure=(; backgroundcolor=:white),
+    Axis=(; xgridvisible=false, ygridvisible=false),
+))
+```
+
 This tutorial builds a small transcript-and-cell dataset using only public
 constructors and accessors. The same pattern is useful for an unsupported assay
 format: parse the source tables at the boundary, then construct ordinary
@@ -88,6 +99,32 @@ push!(dataset, AcquisitionSource(
     coordinate_systems=coord_systems(dataset),
     acquisition_sources=sources(dataset),
 )
+```
+
+The assembled layers share one coordinate system, so they can be inspected in
+one spatial panel. Transcript color denotes the feature label; the dashed
+outline is the acquisition footprint.
+
+```@eval building-dataset
+figure = Figure(size=(720, 340))
+axis = Axis(figure[1, 1]; aspect=DataAspect(), xlabel="x (µm)", ylabel="y (µm)")
+poly!(axis, geometries(cells); color=(:lightsteelblue, 0.45),
+      strokecolor=:steelblue, strokewidth=2)
+poly!(axis, geometries(shapes(dataset, "fov_footprints")); color=:transparent,
+      strokecolor=:gray35, strokewidth=2, linestyle=:dash)
+gene_palette = [:darkorange, :seagreen, :mediumpurple]
+for gene_id in eachindex(features(transcripts))
+    mask = feature_ids(transcripts) .== gene_id
+    scatter!(axis, coords(transcripts)[mask]; color=gene_palette[gene_id],
+             markersize=14, strokecolor=:white, strokewidth=1,
+             label=features(transcripts)[gene_id])
+end
+text!(axis, 2, 3.4; text="cell 101", align=(:center, :center), color=:steelblue4)
+text!(axis, 8, 3.4; text="cell 102", align=(:center, :center), color=:steelblue4)
+axislegend(axis; position=:lt, orientation=:horizontal, framevisible=false)
+xlims!(axis, -0.5, 10.5); ylims!(axis, -0.5, 4.5)
+save("building-dataset.svg", figure)
+Markdown.parse("![Transcript and cell layers](building-dataset.svg)")
 ```
 
 Typed accessors fail early if a name refers to the wrong kind of element:

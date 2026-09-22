@@ -149,6 +149,9 @@ function _spatial_dims(axes::NTuple{N, Symbol}) where N
     Tuple(i for (i, a) in enumerate(axes) if a in (:x, :y, :z))
 end
 
+_pyramid_storage(::Type{T}, level) where {T<:Integer} = round.(T, level)
+_pyramid_storage(::Type{T}, level) where T = T.(level)
+
 """
     build_pyramid!(img, n_levels=3) → img
 
@@ -157,19 +160,20 @@ coarser arrays in `img.pyramid`.
 
 Each level halves the spatial resolution along the `:x` and `:y` axes using
 `ImageBase.restrict`. The channel axis (`:c`) is not downsampled. Existing
-pyramid levels are discarded before building.
+pyramid levels are discarded before building. Levels preserve the image's
+storage element type; filtered integer values are rounded to that type.
 
 # See also
 [`scaleminmax`](@ref), [`channel`](@ref)
 """
-function build_pyramid!(img::SpatialImage, n_levels::Int=3)
+function build_pyramid!(img::SpatialImage{T}, n_levels::Int=3) where T
     owner = _owning_dataset(img)
     owner === nothing || touch!(owner, _dataset_ref(img)[2])
     empty!(img.pyramid)
     sdims   = _spatial_dims(img.axes)
     current = img.data
     for _ in 1:n_levels
-        current = restrict(current, sdims)
+        current = _pyramid_storage(T, restrict(current, sdims))
         push!(img.pyramid, current)
     end
     img

@@ -6,6 +6,7 @@
     repository. To reproduce them locally, download the Visium and Xenium
     datasets and run
     `test/make_fixtures.jl` as described in the [Creating a subset](#creating-a-subset) section.
+    The final fixture panel is built during the normal documentation build.
 
 ## About the dataset
 
@@ -123,12 +124,41 @@ save!(sub; path="test/data/visium_small.zarr")
 
 ## Working with the committed fixture
 
-```julia
+```@setup visium-fixture
+using CairoMakie
+using Markdown
+CairoMakie.activate!(type="svg")
+set_theme!(Theme(
+    fontsize=15,
+    Figure=(; backgroundcolor=:white),
+    Axis=(; xgridvisible=false, ygridvisible=false),
+))
+```
+
+```@example visium-fixture
+using SpatialOmics
+
 ds = read(SpatialDataZarr(), joinpath(pkgdir(SpatialOmics), "test", "data", "visium_small.zarr"))
 
 shp = shapes(ds, "Visium_HD_Mouse_Small_Intestine_square_016um")
 img = images(ds, "Visium_HD_Mouse_Small_Intestine_lowres_image")
 
-@show length(geometries(shp))
-@show size(data(img))
+(bins=length(shp), image_size=size(data(img)))
+```
+
+The low-resolution tissue image and 16 µm bins are positioned by their stored
+coordinate transforms, so the overlay is rebuilt without hard-coded plot
+extents.
+
+```@eval visium-fixture
+figure = Figure(size=(650, 560))
+axis = Axis(figure[1, 1]; aspect=DataAspect(), yreversed=true,
+            title="Visium HD fixture", xlabel="x", ylabel="y")
+image!(axis, scaleminmax(channel(img, 1)))
+poly!(axis, shp; color=(:steelblue, 0.3), strokecolor=(:white, 0.5),
+      strokewidth=0.35)
+tightlimits!(axis)
+save("visium-fixture.svg", figure)
+close(ds; discard=true)
+Markdown.parse("![Visium tissue image and spatial bins](visium-fixture.svg)")
 ```

@@ -1,5 +1,16 @@
 # Assign transcripts and summarise expression
 
+```@setup expression-summaries
+using CairoMakie
+using Markdown
+CairoMakie.activate!(type="svg")
+set_theme!(Theme(
+    fontsize=15,
+    Figure=(; backgroundcolor=:white),
+    Axis=(; xgridvisible=false, ygridvisible=false),
+))
+```
+
 Spatial assignment is a many-to-many spatial join. Unmatched transcripts are
 absent from a membership relation, while a point contained by overlapping cell
 objects can appear more than once. This makes the cardinality explicit instead
@@ -62,6 +73,41 @@ expression = analyze(Expression(), transcripts, cells)
     cell_101=expression[101, :],
     actb=expression[:, "Actb"],
 )
+```
+
+The spatial join and its matrix summary are two views of the same result. The
+unmatched transcript remains visible spatially but contributes to no matrix
+row.
+
+```@eval expression-summaries
+figure = Figure(size=(850, 370))
+spatial_axis = Axis(figure[1, 1]; aspect=DataAspect(), title="Spatial membership",
+                    xlabel="x (µm)", ylabel="y (µm)")
+poly!(spatial_axis, geometries(cells); color=(:lightsteelblue, 0.4),
+      strokecolor=:steelblue, strokewidth=2)
+gene_palette = [:darkorange, :seagreen]
+for gene_id in eachindex(features(transcripts))
+    mask = feature_ids(transcripts) .== gene_id
+    scatter!(spatial_axis, coords(transcripts)[mask]; color=gene_palette[gene_id],
+             markersize=15, label=features(transcripts)[gene_id])
+end
+text!(spatial_axis, 2, 3.45; text="cell 101", align=(:center, :center))
+text!(spatial_axis, 8, 3.45; text="cell 102", align=(:center, :center))
+text!(spatial_axis, 21, 20.5; text="unmatched", align=(:right, :bottom), color=:gray35)
+axislegend(spatial_axis; position=:lt, framevisible=false)
+xlims!(spatial_axis, -1, 22); ylims!(spatial_axis, -1, 22)
+matrix_axis = Axis(figure[1, 2]; title="Cell-by-gene counts",
+                   xticks=(1:2, var_names(expression)),
+                   yticks=(1:2, string.(source_ids(expression))),
+                   xlabel="gene", ylabel="cell instance ID", yreversed=true)
+matrix_values = Matrix(expression[source_ids(expression), var_names(expression)])
+heatmap!(matrix_axis, matrix_values; colormap=:Blues, colorrange=(0, maximum(matrix_values)))
+for row in axes(matrix_values, 1), column in axes(matrix_values, 2)
+    text!(matrix_axis, column, row; text=string(matrix_values[row, column]),
+          align=(:center, :center), color=:black)
+end
+save("expression-summaries.svg", figure)
+Markdown.parse("![Spatial memberships and cell-by-gene counts](expression-summaries.svg)")
 ```
 
 The result is intentionally a lightweight relation rather than a full

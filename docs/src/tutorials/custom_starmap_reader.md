@@ -1,5 +1,17 @@
 # Build a custom STARmap reader
 
+```@setup starmap-figure
+using SpatialOmics
+using CairoMakie
+using Markdown
+CairoMakie.activate!(type="svg")
+set_theme!(Theme(
+    fontsize=15,
+    Figure=(; backgroundcolor=:white),
+    Axis=(; xgridvisible=false, ygridvisible=false),
+))
+```
+
 STARmap export layouts are still evolving. This tutorial shows how to adapt one observed
 STARmap PLUS layout without making that layout part of SpatialOmics' stable API. The same
 pattern applies to an internal assay or a new vendor format: use a small format token,
@@ -165,6 +177,30 @@ A source view of `tile_footprints` is provenance-exact. A source view of the fus
 transcript element emits a warning and uses the source footprint because the CSV did not
 provide transcript origins. Reading the per-tile CSVs is the right extension when exact
 tile-level transcript provenance is required.
+
+The geometry explains why position cannot recover a unique acquisition source:
+transcripts in the overlap are compatible with both registered tile footprints.
+
+```@eval starmap-figure
+tile_1 = Polygon(Point2f[(0, 0), (8, 0), (8, 7), (0, 7), (0, 0)])
+tile_2 = Polygon(Point2f[(5, 2), (13, 2), (13, 9), (5, 9), (5, 2)])
+fused_transcripts = Point2f[(2, 2), (6, 3), (7, 5), (10, 7), (12, 4)]
+figure = Figure(size=(720, 430))
+axis = Axis(figure[1, 1]; aspect=DataAspect(), title="Registered STARmap tiles",
+            xlabel="global x (px)", ylabel="global y (px)")
+poly!(axis, [tile_1]; color=(:dodgerblue, 0.2), strokecolor=:dodgerblue3,
+      strokewidth=2, label="Tile 1 footprint")
+poly!(axis, [tile_2]; color=(:darkorange, 0.2), strokecolor=:darkorange3,
+      strokewidth=2, label="Tile 2 footprint")
+scatter!(axis, fused_transcripts; color=:black, markersize=13,
+         label="fused transcript")
+text!(axis, 6.6, 4.1; text="origin ambiguous", color=:purple,
+      align=(:center, :bottom), fontsize=13)
+axislegend(axis; position=:rt, framevisible=false)
+xlims!(axis, -0.5, 13.5); ylims!(axis, -0.5, 9.5)
+save("starmap-overlap.svg", figure)
+Markdown.parse("![Overlapping registered STARmap tiles](starmap-overlap.svg)")
+```
 
 ## Keep registered images tiled
 

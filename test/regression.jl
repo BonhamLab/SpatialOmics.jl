@@ -807,6 +807,13 @@ end
         @test size(img.pyramid[1], 2) < 64
     end
 
+    @testset "build_pyramid! preserves integer storage type" begin
+        img = SpatialImage(rand(UInt8, 64, 64))
+        build_pyramid!(img, 2)
+        @test length(img.pyramid) == 2
+        @test all(level -> eltype(level) === UInt8, img.pyramid)
+    end
+
     @testset "build_pyramid! replace clears old levels" begin
         arr = rand(Float32, 3, 64, 64)
         img = SpatialImage(arr)

@@ -6,6 +6,7 @@
     repository. To reproduce them locally, download the Xenium and Visium
     datasets and run
     `test/make_fixtures.jl` as described in the [Creating a subset](#creating-a-subset) section.
+    The final fixture panel is built during the normal documentation build.
 
 ## About the dataset
 
@@ -145,14 +146,44 @@ by `read(SpatialDataZarr(), path)` without the full dataset.
 
 The fixture is small enough to use in offline development and CI:
 
-```julia
+```@setup xenium-fixture
+using CairoMakie
+using Markdown
+CairoMakie.activate!(type="svg")
+set_theme!(Theme(
+    fontsize=15,
+    Figure=(; backgroundcolor=:white),
+    Axis=(; xgridvisible=false, ygridvisible=false),
+))
+```
+
+```@example xenium-fixture
+using SpatialOmics
+
 ds = read(SpatialDataZarr(), joinpath(pkgdir(SpatialOmics), "test", "data", "xenium_small.zarr"))
 
 tx  = points(ds, "transcripts")
 shp = shapes(ds, "cell_boundaries")
 img = images(ds, "morphology_focus")
 
-@show length(coords(tx))
-@show nchannels(img), channel_names(img)
-@show top_features(tx, 5)
+(transcripts=length(tx), cells=length(shp),
+ channels=channel_names(img), top_features=top_features(tx, 5))
+```
+
+This executable panel verifies that image placement, segmentation boundaries,
+and transcript coordinates remain registered in the committed fixture.
+
+```@eval xenium-fixture
+figure = Figure(size=(650, 560))
+axis = Axis(figure[1, 1]; aspect=DataAspect(), yreversed=true,
+            title="Xenium fixture", xlabel="x", ylabel="y")
+image!(axis, scaleminmax(channel(img, 1)))
+reset_limits!(axis)
+image_limits = axis.finallimits[]
+poly!(axis, shp; color=:transparent, strokecolor=:cyan, strokewidth=1.2)
+scatter!(axis, tx; color=(:red, 0.45), markersize=3)
+limits!(axis, image_limits)
+save("xenium-fixture.svg", figure)
+close(ds; discard=true)
+Markdown.parse("![Xenium image, cells, and transcripts](xenium-fixture.svg)")
 ```

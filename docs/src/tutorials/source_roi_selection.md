@@ -1,5 +1,16 @@
 # Select acquisition sources and geometric ROIs
 
+```@setup source-roi-selection
+using CairoMakie
+using Markdown
+CairoMakie.activate!(type="svg")
+set_theme!(Theme(
+    fontsize=15,
+    Figure=(; backgroundcolor=:white),
+    Axis=(; xgridvisible=false, ygridvisible=false),
+))
+```
+
 Acquisition identity and geometric containment answer different questions. A
 transcript acquired in one FOV does not become an observation from another FOV
 merely because their footprints overlap.
@@ -71,6 +82,29 @@ overlap_transcripts = points(view(dataset, overlap), "transcripts")
     length(overlap_transcripts),
     [source(overlap_transcripts, i) for i in 1:length(overlap_transcripts)],
 )
+```
+
+The plot makes the distinction visible: source membership is attached to each
+observation, while the ROI is a geometric query over the overlap.
+
+```@eval source-roi-selection
+figure = Figure(size=(760, 390))
+axis = Axis(figure[1, 1]; aspect=DataAspect(), xlabel="x (µm)", ylabel="y (µm)")
+footprints = geometries(shapes(dataset, "fov_footprints"))
+poly!(axis, [footprints[1]]; color=(:dodgerblue, 0.18),
+      strokecolor=:dodgerblue3, strokewidth=2, label="FOV 1 footprint")
+poly!(axis, [footprints[2]]; color=(:darkorange, 0.18),
+      strokecolor=:darkorange3, strokewidth=2, label="FOV 2 footprint")
+scatter!(axis, [Point2f(7, 5)]; color=:dodgerblue3, marker=:circle,
+         markersize=18, label="transcript from FOV 1")
+scatter!(axis, [Point2f(7, 5), Point2f(12, 5)]; color=:darkorange3,
+         marker=:xcross, markersize=20, label="transcript from FOV 2")
+poly!(axis, [Rect2f(6, 4, 2, 2)]; color=(:purple, 0.08),
+      strokecolor=:purple, strokewidth=3, linestyle=:dash, label="geometric ROI")
+axislegend(axis; position=:rt, framevisible=false, labelsize=12)
+xlims!(axis, -0.5, 15.5); ylims!(axis, -0.5, 10.5)
+save("source-roi-selection.svg", figure)
+Markdown.parse("![Acquisition footprints and geometric ROI](source-roi-selection.svg)")
 ```
 
 Use source selection to answer “what did this acquisition produce?” and an ROI

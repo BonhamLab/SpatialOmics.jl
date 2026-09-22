@@ -399,7 +399,7 @@ function ensure_pyramid!(img::SpatialImage{T, N}, n_levels::Int=3) where {T, N}
     @info "Building $(n_levels)-level pyramid for $(basename(grp_path))…"
     current = Array{T}(img.data)
     for i in 1:n_levels
-        current = T.(restrict(current, sdims))
+        current = _pyramid_storage(T, restrict(current, sdims))
         _write_zarr_array(grp_path, "level$i", current)
         push!(img.pyramid, zopen(joinpath(grp_path, "level$i"), "r"; zarr_format=3))
     end

@@ -35,7 +35,9 @@ tutorial. Public-data figures can use the same pre-rendered approach when a
 small redistributable fixture is selected.
 
 This split keeps ordinary CI fast while keeping expensive examples
-reproducible. Generated figures should record their public source dataset and
-the code used to produce the committed asset; collaborator datasets are not
-documentation inputs. Plotting dependencies for asset regeneration live in the
-separate `docs/heavy` environment and are not installed by a normal docs build.
+reproducible. Small synthetic and fixture-backed figures are rendered with
+CairoMakie during the normal documentation build. Full-dataset figures should
+record their public source dataset and the code used to produce the committed
+asset; collaborator datasets are not documentation inputs. Dependencies used
+only for full-dataset asset regeneration live in the separate `docs/heavy`
+environment.

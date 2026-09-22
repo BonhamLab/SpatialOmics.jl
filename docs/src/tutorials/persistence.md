@@ -1,5 +1,16 @@
 # Persist a dataset safely
 
+```@setup persistence
+using CairoMakie
+using Markdown
+CairoMakie.activate!(type="svg")
+set_theme!(Theme(
+    fontsize=15,
+    Figure=(; backgroundcolor=:white),
+    Axis=(; xgridvisible=false, ygridvisible=false),
+))
+```
+
 Every `SpatialDataset` has a backing store, but in-memory changes are staged
 until `save!` is called. Closing a dirty dataset refuses to discard those
 changes implicitly.
@@ -50,6 +61,7 @@ end
 
 changes = [(change.kind, change.name, change.state) for change in dirty(dataset)]
 save!(dataset, "transcripts")
+saved_coordinates = copy(coords(points(dataset, "transcripts")))
 (changes=changes, dirty_after_save=isdirty(dataset))
 ```
 
@@ -66,12 +78,41 @@ remaining changes and is most useful for temporary exploratory datasets.
 edit!(dataset, "transcripts") do transcripts
     coords(transcripts)[1] = Point2f(99, 99)
 end
+staged_coordinates = copy(coords(points(dataset, "transcripts")))
 discard!(dataset, "transcripts")
 
-restored = coords(points(dataset, "transcripts"))[1]
+restored_coordinates = copy(coords(points(dataset, "transcripts")))
+restored = restored_coordinates[1]
 close(dataset)
 rm(root; recursive=true)
 restored
+```
+
+`discard!` restores the saved element rather than silently retaining the staged
+edit. All three panels use the same limits so the discarded displacement is
+apparent.
+
+```@eval persistence
+figure = Figure(size=(900, 310))
+states = (("saved", saved_coordinates, :seagreen),
+          ("staged edit", staged_coordinates, :darkorange),
+          ("after discard!", restored_coordinates, :steelblue))
+for (column, (title, coordinates, color)) in enumerate(states)
+    axis = Axis(figure[1, column]; aspect=DataAspect(), title,
+                xlabel="x", ylabel=column == 1 ? "y" : "")
+    scatter!(axis, coordinates[2:end]; color=:gray60, markersize=12)
+    scatter!(axis, coordinates[1:1]; color, markersize=16)
+    point = first(coordinates)
+    near_edge = point[1] > 90 || point[2] > 90
+    offset = near_edge ? -3 : 3
+    alignment = near_edge ? (:right, :top) : (:left, :bottom)
+    text!(axis, point[1] + offset, point[2] + offset;
+          text="($(Int(point[1])), $(Int(point[2])))",
+          align=alignment, fontsize=12)
+    xlims!(axis, 0, 105); ylims!(axis, 0, 105)
+end
+save("persistence-states.svg", figure)
+Markdown.parse("![Saved, staged, and restored coordinates](persistence-states.svg)")
 ```
 
 For temporary work, `with_dataset() do dataset ... end` guarantees cleanup.
