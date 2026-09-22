@@ -31,8 +31,9 @@ for visualisation — `SpatialShapes(ext)` produces a rectangular polygon.
 ## SpatialElementView and SpatialDatasetView
 
 `view(el, roi)` returns a [`SpatialElementView`](@ref) — a struct holding a
-reference to the parent element and the ROI. No data is read, no arrays are
-allocated. The element's accessors — [`coords`](@ref), [`geometries`](@ref), [`feature_ids`](@ref),
+reference to the parent element and the ROI. Constructing the wrapper does not
+copy the spatial element; its selection mask is computed when filtered data are
+requested. The element's accessors — [`coords`](@ref), [`geometries`](@ref), [`feature_ids`](@ref),
 [`instance_id`](@ref), [`count_per_instance`](@ref) — are all defined on [`SpatialElementView`](@ref)
 and apply the filter on each call.
 
@@ -40,6 +41,39 @@ and apply the filter on each call.
 to every element in the dataset. Accessing a specific element via
 [`points`](@ref) or [`images`](@ref) returns a [`SpatialElementView`](@ref)
 for that element.
+
+## Acquisition sources and geometric regions
+
+A registered [`AcquisitionSource`](@ref) represents where an observation was
+acquired, independently of where its coordinates happen to fall. This matters
+when fields of view overlap: a transcript recorded by `fov_1_px` can lie inside
+the footprint of `fov_2_px` without becoming an observation from FOV 2.
+
+```julia
+fov = view(ds, "fov_2_px")  # provenance: observations acquired in FOV 2
+roi = view(ds, polygon)      # geometry: every observation inside the polygon
+```
+
+Multiple sources use ordinary Julia selection semantics: selecting FOVs 1 and
+5 returns those two sources, not the rectangular region bounded by them.
+
+```julia
+selected = view(ds, ["fov_1_px", "fov_5_px"])
+tx = points(selected, "transcripts")
+tiles = images(selected, "morphology")
+```
+
+`tiles` is a [`SpatialRasterTiles`](@ref) collection of positioned image crops.
+Plotting it renders each crop in the shared coordinate system without allocating
+pixels in the gap between disconnected FOVs. Creating a dense bounding canvas
+is a separate, explicit operation.
+
+Points and shapes store compact per-observation origin IDs. Images and labels
+are cropped to the registered source footprint. If a vector element predates
+origin tracking, dataset-level source selection emits a warning and falls back
+to footprint geometry; direct element-level source selection instead errors.
+This makes the compatibility behavior visible without adding boilerplate to
+the usual source-selection workflow.
 
 This is the preferred way to build multi-layer plots: define the region once,
 then pass the view to each plot verb independently. Each verb applies the filter
@@ -75,10 +109,11 @@ you only need to plot or inspect the region once.
 Point containment is unambiguous — a point is either inside a region or not.
 Shape containment admits two interpretations:
 
-- `:any` (default) — include shapes whose bounding box intersects the ROI.
-  This is a fast approximation: some included shapes may extend outside the ROI.
-- `:full` — include only shapes whose bounding box lies entirely within the ROI.
-  More conservative; use when you need all included shapes to be completely visible.
+- `:any` (default) — include shapes that intersect the ROI. Polygon ROIs use an
+  exact intersection test after a bounding-box prefilter; rectangular extents
+  use bounding-box intersection.
+- `:full` — include only shapes contained by the ROI. Polygon ROIs use exact
+  containment; rectangular extents use bounding-box containment.
 
 The `overlap` keyword is passed to `view(el, roi; overlap=:any)`. It has no
 effect on point filtering.

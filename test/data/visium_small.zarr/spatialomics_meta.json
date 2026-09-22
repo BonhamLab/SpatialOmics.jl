@@ -1,1 +1,1 @@
-{"coord_systems":[{"axes":["x","y"],"name":"Visium_HD_Mouse_Small_Intestine","units":["µm","µm"]},{"axes":["x","y"],"name":"Visium_HD_Mouse_Small_Intestine_downscaled_lowres","units":["µm","µm"]}]}
+{"format_version":1,"coord_systems":[{"axes":["x","y"],"name":"Visium_HD_Mouse_Small_Intestine","units":["µm","µm"]},{"axes":["x","y"],"name":"Visium_HD_Mouse_Small_Intestine_downscaled_lowres","units":["µm","µm"]}]}

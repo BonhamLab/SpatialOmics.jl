@@ -4,7 +4,8 @@ A Julia library for loading, representing, and analysing spatial transcriptomics
 data. It provides a common data model for multi-modal spatial experiments —
 transcripts, cell boundaries, tissue images, segmentation masks, and
 expression matrices — alongside lazy spatial views, a multi-FOV coordinate
-system graph, and SpatialData OME-Zarr interoperability with Python tools.
+system graph, explicit persistence, and import support for SpatialData Zarr
+stores.
 
 ## Installation
 
@@ -19,7 +20,7 @@ Pkg.add("SpatialOmics")
 using CairoMakie   # load a Makie backend before plotting
 using SpatialOmics
 
-# Load from SpatialData OME-Zarr (Xenium, CosMx, Visium, …)
+# Load a native store or a supported SpatialData Zarr store
 ds = read(SpatialDataZarr(), "/path/to/experiment.zarr")
 
 # Inspect structure
@@ -44,6 +45,8 @@ fig
 
 - **[Explanation](@ref "The data model")** — Why things are designed the way they
   are: the data model, coordinate system graph, and lazy view semantics.
+- **[Tutorials](@ref "Tutorials")** — Executable core lessons plus
+  pre-rendered workflows using public technology datasets.
 - **[Reference](@ref "Dataset")** — Complete API documentation for all exported
   functions and types.
 - **[Guides](@ref "Quickstart")** — Task-oriented walkthroughs: loading data,

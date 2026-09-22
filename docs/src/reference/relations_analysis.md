@@ -9,8 +9,6 @@ by `analyze`.
 ```@docs
 RelationKind
 Membership
-Proximity
-KNN
 Expression
 ```
 
@@ -18,8 +16,11 @@ Expression
 
 ```@docs
 SpatialRelation
+source_ids
+destination_ids
 nobs
 nvar
+obs_names
 var_names
 annotate
 ```

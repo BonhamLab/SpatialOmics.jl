@@ -30,6 +30,7 @@ mutable struct SpatialImage{T, N}
     coord_system      :: String
     pixel_to_cs       :: AbstractTransformation        # image pixel coords → coord_system
     display_transform :: Union{Nothing, Function}      # applied post-materialization in display
+    _attachment       :: Union{Nothing, Tuple{WeakRef, String}}
 end
 
 function _default_image_axes(N::Int)
@@ -48,8 +49,20 @@ function SpatialImage(data::AbstractArray{T, N};
     pyr = pyramid === nothing ? AbstractArray{T,N}[] :
           AbstractArray{T,N}[p for p in pyramid]
     SpatialImage{T, N}(data, pyr, NTuple{N, Symbol}(axes), channel_names,
-                       coord_system, pixel_to_cs, display_transform)
+                       coord_system, pixel_to_cs, display_transform, nothing)
 end
+
+_dataset_ref(img::SpatialImage) = img._attachment
+function _set_backref!(img::SpatialImage, ds::SpatialDataset, name::String)
+    img._attachment = (WeakRef(ds), name)
+end
+function _clear_backref!(img::SpatialImage)
+    img._attachment = nothing
+    img
+end
+
+Base.setindex!(ds::SpatialDataset, img::SpatialImage, name::String) =
+    _attach_element!(ds, img, name)
 
 # ── Accessors ──────────────────────────────────────────────────────────────────
 
@@ -89,11 +102,55 @@ end
 Base.size(img::SpatialImage)   = size(img.data)
 Base.length(img::SpatialImage) = length(img.data)
 
+"""
+    SpatialRasterTiles
+
+Positioned raster pieces selected from non-contiguous acquisition sources.
+Each tile retains its own pixel-to-coordinate-system transform. The collection
+does not allocate or represent pixels in gaps between tiles; call `collect` on
+individual tiles when dense arrays are required.
+"""
+struct SpatialRasterTiles{R} <: AbstractVector{R}
+    tiles   :: Vector{R}
+    sources :: Vector{String}
+
+    function SpatialRasterTiles(tiles::Vector{R}, sources::Vector{String}) where R
+        length(tiles) == length(sources) || throw(DimensionMismatch(
+            "raster tile count $(length(tiles)) does not match source count $(length(sources))",
+        ))
+        new{R}(tiles, sources)
+    end
+end
+
+Base.size(tiles::SpatialRasterTiles) = (length(tiles.tiles),)
+Base.length(tiles::SpatialRasterTiles) = length(tiles.tiles)
+Base.getindex(tiles::SpatialRasterTiles, index::Int) = tiles.tiles[index]
+Base.IndexStyle(::Type{<:SpatialRasterTiles}) = IndexLinear()
+
+"""
+    sources(tiles::SpatialRasterTiles) -> Vector{String}
+
+Return the acquisition source corresponding to each positioned raster tile.
+"""
+sources(tiles::SpatialRasterTiles) = copy(tiles.sources)
+
+function coord_system(tiles::SpatialRasterTiles)
+    isempty(tiles) && return ""
+    systems = unique(coord_system(tile) for tile in tiles)
+    length(systems) == 1 || throw(ArgumentError(
+        "raster tiles use multiple coordinate systems: $(collect(systems))",
+    ))
+    only(systems)
+end
+
 # ── Pyramid ────────────────────────────────────────────────────────────────────
 
 function _spatial_dims(axes::NTuple{N, Symbol}) where N
     Tuple(i for (i, a) in enumerate(axes) if a in (:x, :y, :z))
 end
+
+_pyramid_storage(::Type{T}, level) where {T<:Integer} = round.(T, level)
+_pyramid_storage(::Type{T}, level) where T = T.(level)
 
 """
     build_pyramid!(img, n_levels=3) → img
@@ -103,17 +160,20 @@ coarser arrays in `img.pyramid`.
 
 Each level halves the spatial resolution along the `:x` and `:y` axes using
 `ImageBase.restrict`. The channel axis (`:c`) is not downsampled. Existing
-pyramid levels are discarded before building.
+pyramid levels are discarded before building. Levels preserve the image's
+storage element type; filtered integer values are rounded to that type.
 
 # See also
 [`scaleminmax`](@ref), [`channel`](@ref)
 """
-function build_pyramid!(img::SpatialImage, n_levels::Int=3)
+function build_pyramid!(img::SpatialImage{T}, n_levels::Int=3) where T
+    owner = _owning_dataset(img)
+    owner === nothing || touch!(owner, _dataset_ref(img)[2])
     empty!(img.pyramid)
     sdims   = _spatial_dims(img.axes)
     current = img.data
     for _ in 1:n_levels
-        current = restrict(current, sdims)
+        current = _pyramid_storage(T, restrict(current, sdims))
         push!(img.pyramid, current)
     end
     img
@@ -144,6 +204,9 @@ struct SpatialLabels{T<:Integer, N}
     coord_system :: String
     pixel_to_cs  :: AbstractTransformation
 end
+
+Base.setindex!(ds::SpatialDataset, lbl::SpatialLabels, name::String) =
+    _attach_element!(ds, lbl, name)
 
 function SpatialLabels(data::AbstractArray{T, N};
                        axes         = _default_image_axes(N),
@@ -234,6 +297,10 @@ function channel(img::SpatialImage, ch::String)
     channel(img, i)
 end
 
+channel(tiles::SpatialRasterTiles{<:SpatialImage}, ch) = SpatialRasterTiles(
+    [channel(tile, ch) for tile in tiles], copy(tiles.sources),
+)
+
 # ── scaleminmax — lazy display-time intensity rescaling ────────────────────────
 
 """
@@ -257,6 +324,30 @@ function scaleminmax(img::SpatialImage)
                  coord_system=img.coord_system, pixel_to_cs=img.pixel_to_cs,
                  pyramid=img.pyramid,
                  display_transform=scaleminmax(mn, mx))
+end
+
+function scaleminmax(tiles::SpatialRasterTiles{<:SpatialImage})
+    isempty(tiles) && return tiles
+    ranges = map(tiles) do tile
+        source = isempty(tile.pyramid) ? tile.data : tile.pyramid[end]
+        extrema(Array(source))
+    end
+    minimum_value = Float32(minimum(first, ranges))
+    maximum_value = Float32(maximum(last, ranges))
+    transform = scaleminmax(minimum_value, maximum_value)
+    scaled = [
+        SpatialImage(
+            tile.data;
+            axes=tile.axes,
+            channel_names=tile.channel_names,
+            coord_system=tile.coord_system,
+            pixel_to_cs=tile.pixel_to_cs,
+            pyramid=tile.pyramid,
+            display_transform=transform,
+        )
+        for tile in tiles
+    ]
+    SpatialRasterTiles(scaled, copy(tiles.sources))
 end
 
 # ── pyramid_level — internal helper (not exported) ─────────────────────────────
@@ -352,6 +443,18 @@ function colorview(CT::Type{<:Colorant}, imgs::SpatialImage...)
                                    imgs[1].coord_system, imgs[1].pixel_to_cs, imgs[1].axes)
 end
 
+function colorview(CT::Type{<:Colorant}, collections::SpatialRasterTiles...)
+    isempty(collections) && throw(ArgumentError("at least one raster collection is required"))
+    expected_sources = first(collections).sources
+    all(collection -> collection.sources == expected_sources, collections) ||
+        throw(ArgumentError("raster collections must contain the same sources in the same order"))
+    tiles = [
+        colorview(CT, (collection[index] for collection in collections)...)
+        for index in eachindex(first(collections))
+    ]
+    SpatialRasterTiles(tiles, copy(expected_sources))
+end
+
 function _spatial_colorview(CT::Type{<:Colorant}, img::SpatialImage{T,N}) where {T,N}
     SpatialImageColorView{CT, T, N}(img.data, img.pyramid, CT, img.display_transform,
                                     img.coord_system, img.pixel_to_cs, img.axes)
@@ -383,6 +486,31 @@ function Base.view(img::SpatialImage, ext::SpatialExtent)
                  axes=img.axes, channel_names=img.channel_names,
                  coord_system=img.coord_system, pixel_to_cs=p2cs,
                  pyramid=new_pyr, display_transform=img.display_transform)
+end
+
+function Base.view(lbl::SpatialLabels, ext::SpatialExtent)
+    N  = ndims(lbl.data)
+    xi = something(findfirst(==(:x), lbl.axes), 1)
+    yi = something(findfirst(==(:y), lbl.axes), 2)
+    lo = _global_to_pixel(lbl.pixel_to_cs, SVector(ext.xmin, ext.ymin))
+    hi = _global_to_pixel(lbl.pixel_to_cs, SVector(ext.xmax, ext.ymax))
+    xi_lo, xi_hi = _px_range(lo[1], hi[1], size(lbl.data, xi))
+    yi_lo, yi_hi = _px_range(lo[2], hi[2], size(lbl.data, yi))
+    slices = ntuple(
+        dimension -> dimension == xi ? (xi_lo:xi_hi) :
+                     dimension == yi ? (yi_lo:yi_hi) : Colon(),
+        N,
+    )
+    pixel_to_cs = _shift_pixel_origin(
+        lbl.pixel_to_cs, Float64(xi_lo - 1), Float64(yi_lo - 1),
+    )
+    SpatialLabels(
+        view(lbl.data, slices...);
+        axes=lbl.axes,
+        instance_map=copy(lbl.instance_map),
+        coord_system=lbl.coord_system,
+        pixel_to_cs,
+    )
 end
 
 _px_range(lo, hi, n) = (clamp(floor(Int, min(lo, hi)) + 1, 1, n),

@@ -81,6 +81,15 @@ end
 Makie.convert_arguments(P::Type{<:Image}, img::SpatialImage) =
     convert_arguments(P, colorview(Gray, img))
 
+function Makie.image!(ax::Makie.Axis, tiles::SpatialRasterTiles{<:SpatialImage}; kw...)
+    [Makie.image!(ax, tile; kw...) for tile in tiles]
+end
+
+function Makie.image!(ax::Makie.Axis,
+                      tiles::SpatialRasterTiles{<:SpatialImageColorView}; kw...)
+    [Makie.image!(ax, tile; kw...) for tile in tiles]
+end
+
 # ── SpatialImage/SpatialImageColorView → Image (zoom-responsive) ─────────────
 # For images with pyramid levels, image!(ax, ...) pushes a new Observable value
 # when the axis zoom changes, selecting the pyramid level whose full-res/screen-px

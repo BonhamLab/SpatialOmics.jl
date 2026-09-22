@@ -3,13 +3,16 @@
 !!! note "Pre-rendered tutorial"
     This tutorial uses a full Xenium dataset (~5 GB). The code is **not run
     automatically** — images below are pre-rendered and committed to the
-    repository. To reproduce them locally, download the dataset and run
+    repository. To reproduce them locally, download the Xenium and Visium
+    datasets and run
     `test/make_fixtures.jl` as described in the [Creating a subset](#creating-a-subset) section.
+    The final fixture panel is built during the normal documentation build.
 
 ## About the dataset
 
-The example dataset is the **10x Genomics Xenium Mouse Brain Coronal Section**,
-distributed by the [SpatialData project](https://spatialdata.scverse.org/en/stable/tutorials/notebooks/datasets/)
+The example dataset is the [**10x Genomics Xenium FFPE Human Lung Cancer with
+multimodal cell segmentation**](https://www.10xgenomics.com/datasets/preview-data-ffpe-human-lung-cancer-with-xenium-multimodal-cell-segmentation-1-standard),
+distributed in a converted form by the [SpatialData project](https://spatialdata.scverse.org/en/stable/tutorials/notebooks/datasets/)
 as a Python-compatible OME-Zarr store. It contains:
 
 - ~5 million transcripts (`points/transcripts`)
@@ -99,21 +102,24 @@ fig
 
 The committed test fixture at `test/data/xenium_small.zarr` was created from a
 200 µm × 200 µm region of this dataset. The `test/make_fixtures.jl` script
-automates this in two passes:
+writes overview figures, native fixtures, and ROI figures.
 
-**Pass 1 — generate overview figure and pick coordinates:**
+Run it once, inspect the overview figures, and update the region constants in
+the script if a different patch is needed:
 
 ```julia
-# Run: julia --project=. test/make_fixtures.jl
-# Inspect docs/src/assets/xenium_overview.png
-# Fill in XEN_XMIN / XEN_XMAX / XEN_YMIN / XEN_YMAX in the script
+# Run from the repository root:
+# julia --project=docs/heavy -e 'using Pkg; Pkg.instantiate()' # first use
+# julia --project=docs/heavy test/make_fixtures.jl /path/to/xenium_ex.zarr /path/to/visium_ex.zarr
+# Inspect docs/src/assets/xenium_overview.png, then update
+# XEN_XMIN / XEN_XMAX / XEN_YMIN / XEN_YMAX if needed.
 ```
 
-**Pass 2 — create the fixture:**
+Rerun the same command after changing the region:
 
 ```julia
 # After filling in coordinates, re-run the script:
-# julia --project=. test/make_fixtures.jl
+# julia --project=docs/heavy test/make_fixtures.jl /path/to/xenium_ex.zarr /path/to/visium_ex.zarr
 # This writes test/data/xenium_small.zarr and docs/src/assets/xenium_roi.png
 ```
 
@@ -128,25 +134,56 @@ sub["transcripts"]     = collect(points(roi, "transcripts"))
 sub["cell_boundaries"] = collect(shapes(roi, "cell_boundaries"))
 sub["morphology_focus"] = images(roi, "morphology_focus")
 
-write!(sub, "test/data/xenium_small.zarr", SpatialDataZarr())
+save!(sub; path="test/data/xenium_small.zarr")
 ```
 
-`view` is lazy — no data is read until `collect` or the plot verb materialises
-it. The resulting zarr is in SpatialOmics' native format and is loaded directly
+`view` is lazy — constructing it does not copy its elements; accessors,
+`collect`, and plot verbs materialise the selected data as needed. The
+resulting zarr is in SpatialOmics' native format and is loaded directly
 by `read(SpatialDataZarr(), path)` without the full dataset.
 
 ## Working with the committed fixture
 
 The fixture is small enough to use in offline development and CI:
 
-```julia
+```@setup xenium-fixture
+using CairoMakie
+using Markdown
+CairoMakie.activate!(type="svg")
+set_theme!(Theme(
+    fontsize=15,
+    Figure=(; backgroundcolor=:white),
+    Axis=(; xgridvisible=false, ygridvisible=false),
+))
+```
+
+```@example xenium-fixture
+using SpatialOmics
+
 ds = read(SpatialDataZarr(), joinpath(pkgdir(SpatialOmics), "test", "data", "xenium_small.zarr"))
 
 tx  = points(ds, "transcripts")
 shp = shapes(ds, "cell_boundaries")
 img = images(ds, "morphology_focus")
 
-@show length(coords(tx))
-@show nchannels(img), channel_names(img)
-@show top_features(tx, 5)
+(transcripts=length(tx), cells=length(shp),
+ channels=channel_names(img), top_features=top_features(tx, 5))
+```
+
+This executable panel verifies that image placement, segmentation boundaries,
+and transcript coordinates remain registered in the committed fixture.
+
+```@eval xenium-fixture
+figure = Figure(size=(650, 560))
+axis = Axis(figure[1, 1]; aspect=DataAspect(), yreversed=true,
+            title="Xenium fixture", xlabel="x", ylabel="y")
+image!(axis, scaleminmax(channel(img, 1)))
+reset_limits!(axis)
+image_limits = axis.finallimits[]
+poly!(axis, shp; color=:transparent, strokecolor=:cyan, strokewidth=1.2)
+scatter!(axis, tx; color=(:red, 0.45), markersize=3)
+limits!(axis, image_limits)
+save("xenium-fixture.svg", figure)
+close(ds; discard=true)
+Markdown.parse("![Xenium image, cells, and transcripts](xenium-fixture.svg)")
 ```

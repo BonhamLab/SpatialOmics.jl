@@ -16,8 +16,8 @@ images are far too large to hold in memory.
 
 ## Named coordinate systems as a graph
 
-SpatialOmics models coordinate spaces explicitly as a directed acyclic graph
-(DAG). Each node is a [`CoordinateSystem`](@ref) with a name, axis labels, and units.
+SpatialOmics models coordinate spaces explicitly as a named transform graph.
+Each node is a [`CoordinateSystem`](@ref) with a name, axis labels, and units.
 Each edge is an [`AbstractTransformation`](@ref) carrying `src` and `dst` coordinate
 system names.
 
@@ -39,7 +39,9 @@ homogeneous coordinates. This representation lets rotation, scaling, shear, and
 translation be encoded uniformly, and lets sequential transforms be fused by
 matrix multiplication.
 
-The constructor helpers — [`translation`](@ref), [`scaling`](@ref), [`rotation`](@ref), [`flip_y`](@ref) — each
+The constructor helpers — [`translation`](@ref SpatialOmics.translation),
+[`scaling`](@ref SpatialOmics.scaling), [`rotation`](@ref SpatialOmics.rotation),
+and [`flip_y`](@ref SpatialOmics.flip_y) — each
 produce an [`Affine`](@ref) with explicit `src` and `dst` names:
 
 ```julia
@@ -53,7 +55,7 @@ push!(ds, CoordinateSystem("global"))
 push!(ds, t)
 ```
 
-[`compose`](@ref) fuses two [`Affine`](@ref) transforms into one (matrix product), or wraps
+[`compose`](@ref SpatialOmics.compose) fuses two [`Affine`](@ref) transforms into one (matrix product), or wraps
 mixed types in a [`Sequence`](@ref). The `src`/`dst` chain must be consistent —
 `a.dst == b.src` is enforced.
 
@@ -72,7 +74,8 @@ answer.
 
 `CoordinateTransformations.jl` is a general-purpose library for function-based
 transforms. SpatialOmics uses its own [`Affine`](@ref) type for two reasons: (1) the
-augmented-matrix representation enables O(1) fusion via [`compose`](@ref), which matters
+augmented-matrix representation enables O(1) fusion via
+[`compose`](@ref SpatialOmics.compose), which matters
 when resolving paths through multi-hop graphs at load time; (2) every
 transformation carries explicit `src` and `dst` names, making the graph
 structure first-class rather than implicit in calling code.

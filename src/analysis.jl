@@ -4,6 +4,27 @@ _element_name(el::Union{SpatialPoints, SpatialShapes}) =
     (att = _dataset_ref(el); att === nothing ? "" : att[2])
 _element_name(::Any) = ""
 
+# FlexiJoins' spatial-tree mode needs both row indexing and direct column
+# properties. A plain Tables.rowtable supplies only the former.
+struct _SpatialJoinTable{C,T} <: AbstractVector{T}
+    columns::C
+end
+
+function _SpatialJoinTable(columns::NamedTuple)
+    row_type = NamedTuple{keys(columns),Tuple{map(eltype, values(columns))...}}
+    _SpatialJoinTable{typeof(columns),row_type}(columns)
+end
+
+Base.IndexStyle(::Type{<:_SpatialJoinTable}) = IndexLinear()
+Base.size(table::_SpatialJoinTable) = (length(first(values(table.columns))),)
+function Base.getindex(table::_SpatialJoinTable, index::Int)
+    NamedTuple{keys(table.columns)}(map(column -> column[index], values(table.columns)))
+end
+function Base.getproperty(table::_SpatialJoinTable, name::Symbol)
+    name === :columns && return getfield(table, :columns)
+    getproperty(getfield(table, :columns), name)
+end
+
 # ── Default dispatch — token inferred from argument types ─────────────────────
 
 """
@@ -16,9 +37,9 @@ Compute a spatial relation between elements.
 Dispatch on the `RelationKind` token selects the algorithm:
 
 - `analyze(Expression(), pts, cells)` — count transcripts per gene per cell.
-  Each transcript is assigned to the first containing cell (bounding-box
-  pre-filter, then exact point-in-polygon). Returns an n_cells × n_genes
-  count matrix.
+  Each transcript contributes to every containing cell (bounding-box
+  pre-filter, then exact point-in-polygon), so overlapping cell objects retain
+  many-to-many membership. Returns an n_cells × n_genes count matrix.
 - `analyze(Membership(), src, dst)` — assign each point or shape in `src`
   to the containing shape in `dst`. `strict=true` requires full containment;
   default uses centroid or point containment.
@@ -62,9 +83,9 @@ function analyze(src::SpatialShapes, dst::SpatialShapes, obs;
     dst_pos   = Dict{Int32,Int}(id => i for (i, id) in enumerate(dst.instance_id))
 
     src_geoms = GeometryOps.centroid.(src.geometries)
-    src_tbl   = Tables.rowtable((geom=src_geoms,         label=labels,
-                                  src_instance_id=src.instance_id))
-    dst_tbl   = Tables.rowtable((poly=dst.geometries,    dst_instance_id=dst.instance_id))
+    src_tbl   = _SpatialJoinTable((geom=src_geoms, label=labels,
+                                   src_instance_id=src.instance_id))
+    dst_tbl   = _SpatialJoinTable((poly=dst.geometries, dst_instance_id=dst.instance_id))
 
     for row in innerjoin((src_tbl, dst_tbl), by_pred(:geom, predicate, :poly))
         lpos = get(label_pos, row[1].label, 0)
@@ -92,23 +113,49 @@ function analyze(::Expression, pts::SpatialPoints, cells::SpatialShapes;
     weights  = zeros(Float32, n_cells, n_genes)
     cell_pos = Dict{Int32,Int}(id => i for (i, id) in enumerate(cells.instance_id))
 
-    # FlexiJoins expects row-iterable tables; result rows are Tuple{src_row, dst_row}.
-    # Points go first (simpler geoms), cells second (tree-indexed by FlexiJoins).
-    pts_tbl   = Tables.rowtable((pt=pts.coords,         feature_id=pts.feature_id))
-    cells_tbl = Tables.rowtable((poly=cells.geometries, instance_id=cells.instance_id))
+    # Points go first (simpler geometries), cells second (tree-indexed).
+    pts_tbl = _SpatialJoinTable((
+        pt=pts.coords,
+        feature_id=pts.feature_id,
+        point_index=Int32.(eachindex(pts.coords)),
+    ))
+    destination_geometries, destination_ids, deduplicate = _point_join_destinations(cells)
+    cells_tbl = _SpatialJoinTable((poly=destination_geometries, instance_id=destination_ids))
 
-    for row in innerjoin((pts_tbl, cells_tbl), by_pred(:pt, predicate, :poly))
+    joined = innerjoin((pts_tbl, cells_tbl), by_pred(:pt, predicate, :poly))
+    _accumulate_expression!(weights, joined, cell_pos, deduplicate)
+
+    var_nt = isempty(pts.feature_codebook) ? NamedTuple() :
+             NamedTuple{(:name,)}((pts.feature_codebook,))
+    SpatialRelation(Expression(), _element_name(cells),
+                    cells.instance_id, weights; var=var_nt)
+end
+
+function _accumulate_expression!(weights, joined, cell_pos, ::Val{false})
+    for row in joined
         gid  = row[1].feature_id
         gid == 0 && continue
         cpos = get(cell_pos, row[2].instance_id, 0)
         cpos == 0 && continue
         weights[cpos, gid] += 1f0
     end
+    weights
+end
 
-    var_nt = isempty(pts.feature_codebook) ? NamedTuple() :
-             NamedTuple{(:name,)}((pts.feature_codebook,))
-    SpatialRelation(Expression(), _element_name(cells),
-                    cells.instance_id, weights; var=var_nt)
+function _accumulate_expression!(weights, joined, cell_pos, ::Val{true})
+    seen = Set{Tuple{Int32,Int32}}()
+    for row in joined
+        gid = row[1].feature_id
+        gid == 0 && continue
+        destination_id = row[2].instance_id
+        key = (row[1].point_index, destination_id)
+        key in seen && continue
+        push!(seen, key)
+        cpos = get(cell_pos, destination_id, 0)
+        cpos == 0 && continue
+        weights[cpos, gid] += 1f0
+    end
+    weights
 end
 
 # ── Membership — assign each source point/shape to a containing destination ───
@@ -118,15 +165,49 @@ end
 
 function analyze(::Membership{strict}, pts::SpatialPoints, dst::SpatialShapes;
                  predicate=GeometryOps.within) where strict
-    pts_tbl = Tables.rowtable((pt=pts.coords,          pos=Int32.(eachindex(pts.coords))))
-    dst_tbl = Tables.rowtable((poly=dst.geometries,    dst_instance_id=dst.instance_id))
+    positions = Int32.(eachindex(pts.coords))
+    pts_tbl = _SpatialJoinTable((pt=pts.coords, pos=positions))
+    destination_geometries, destination_ids, deduplicate = _point_join_destinations(dst)
+    dst_tbl = _SpatialJoinTable((poly=destination_geometries, dst_instance_id=destination_ids))
 
     joined  = collect(innerjoin((pts_tbl, dst_tbl), by_pred(:pt, predicate, :poly)))
-    src_ids = Int32[row[1].pos            for row in joined]
-    dst_ids = Int32[row[2].dst_instance_id for row in joined]
+    src_ids, dst_ids = _membership_ids(joined, deduplicate)
 
     SpatialRelation(Membership{strict}(), _element_name(pts), _element_name(dst),
                     src_ids, dst_ids, nothing)
+end
+
+function _point_join_destinations(dst::SpatialShapes)
+    dst.geometries, dst.instance_id, Val(false)
+end
+
+function _point_join_destinations(dst::SpatialShapes{<:MultiPolygon})
+    components = [polygon for multi in dst.geometries for polygon in GeoInterface.getgeom(multi)]
+    ids = Int32[
+        dst.instance_id[i]
+        for i in eachindex(dst.geometries)
+        for _ in 1:GeoInterface.ngeom(dst.geometries[i])
+    ]
+    components, ids, Val(true)
+end
+
+function _membership_ids(joined, ::Val{false})
+    Int32[row[1].pos for row in joined],
+    Int32[row[2].dst_instance_id for row in joined]
+end
+
+function _membership_ids(joined, ::Val{true})
+    pairs = Set{Tuple{Int32,Int32}}()
+    src_ids = Int32[]
+    dst_ids = Int32[]
+    for row in joined
+        pair = (row[1].pos, row[2].dst_instance_id)
+        pair in pairs && continue
+        push!(pairs, pair)
+        push!(src_ids, pair[1])
+        push!(dst_ids, pair[2])
+    end
+    src_ids, dst_ids
 end
 
 function analyze(::Membership{strict}, src::SpatialShapes, dst::SpatialShapes;
@@ -135,8 +216,8 @@ function analyze(::Membership{strict}, src::SpatialShapes, dst::SpatialShapes;
     src_geoms = strict ? src.geometries : GeometryOps.centroid.(src.geometries)
     pred      = isnothing(predicate) ? GeometryOps.within : predicate
 
-    src_tbl = Tables.rowtable((geom=src_geoms,          src_instance_id=src.instance_id))
-    dst_tbl = Tables.rowtable((poly=dst.geometries,      dst_instance_id=dst.instance_id))
+    src_tbl = _SpatialJoinTable((geom=src_geoms, src_instance_id=src.instance_id))
+    dst_tbl = _SpatialJoinTable((poly=dst.geometries, dst_instance_id=dst.instance_id))
 
     joined  = collect(innerjoin((src_tbl, dst_tbl), by_pred(:geom, pred, :poly)))
     src_ids = Int32[row[1].src_instance_id for row in joined]
@@ -159,7 +240,7 @@ signed distance.
 Returns a `Float32` vector of length `length(shapes_a)`.
 
 # See also
-[`analyze`](@ref), [`Proximity`](@ref)
+[`analyze`](@ref)
 """
 function distances(shapes_a::SpatialShapes, shapes_b::SpatialShapes) :: Vector{Float32}
     [Float32(minimum(GeometryOps.distance(GeometryOps.centroid(g_a), g_b)

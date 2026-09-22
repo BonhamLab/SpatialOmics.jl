@@ -8,6 +8,7 @@ See [The data model](@ref) for a conceptual overview.
 ```@docs
 SpatialDataset
 BackingStore
+AcquisitionSource
 ```
 
 ## Lifecycle
@@ -15,6 +16,13 @@ BackingStore
 ```@docs
 with_dataset
 keep!
+save!
+discard!
+edit!
+touch!
+isdirty
+dirty
+Base.close(::SpatialDataset)
 ```
 
 ## Accessors
@@ -23,6 +31,9 @@ keep!
 elements
 coord_systems
 transform
+sources
+source
+source_attributes
 relations
 ```
 

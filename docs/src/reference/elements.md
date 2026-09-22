@@ -14,9 +14,12 @@ SpatialPoints
 coords
 features
 feature_ids
+origins
+origin_ids
 coord_system
 instance_id
 instance_ids
+with_instance_ids
 ```
 
 ## Shape collections
@@ -42,5 +45,6 @@ count_per_instance
 
 ## Re-exported geometry types
 
-`Polygon` and `Point2f` are re-exported from `GeometryBasics.jl`.
-Use `Polygon(ring)` to construct cell boundary polygons for `SpatialShapes`.
+`Polygon`, `MultiPolygon`, and `Point2f` are re-exported from
+`GeometryBasics.jl`. Use a `MultiPolygon` when one biological object has
+multiple disconnected components; it remains one row in `SpatialShapes`.

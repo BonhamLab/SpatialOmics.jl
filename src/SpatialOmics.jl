@@ -1,6 +1,6 @@
 module SpatialOmics
 
-using GeometryBasics: Point, Point2f, Polygon, AbstractGeometry
+using GeometryBasics: Point, Point2f, Polygon, MultiPolygon, AbstractGeometry
 using GeoInterface
 using Tables
 using StaticArrays
@@ -31,34 +31,34 @@ export
     # Use SpatialOmics.translation(...) etc. when constructing pixel_to_cs transforms.
     apply, apply!, resolve,
     # Dataset
-    BackingStore, SpatialDataset,
-    elements, coord_systems, transform,
-    with_dataset, keep!,
+    BackingStore, SpatialDataset, AcquisitionSource,
+    elements, coord_systems, transform, sources, source, source_attributes,
+    with_dataset, keep!, save!, discard!, edit!, touch!, isdirty, dirty,
     # Elements
     SpatialPoints, SpatialShapes, SpatialShape,
-    Polygon, Point2f,
+    Polygon, MultiPolygon, Point2f,
     points, shapes,
-    coords, features, feature_ids, coord_system,
-    geometries, instance_id, instance_ids,
+    coords, features, feature_ids, origins, origin_ids, coord_system,
+    geometries, instance_id, instance_ids, with_instance_ids,
     subsample, top_features, count_per_instance,
     # Views
     SpatialExtent, SpatialROI,
     SpatialElementView, SpatialDatasetView,
     geometry, roi, roi!,
     # Images + Labels
-    SpatialImage, SpatialLabels,
+    SpatialImage, SpatialLabels, SpatialRasterTiles,
     data, nchannels, channel_names, build_pyramid!, ensure_pyramid!, images, labels,
     SpatialImageColorView, channel, scaleminmax, colorview, Gray, RGB,
     # Relations
     RelationKind, Membership, Expression,
     SpatialRelation,
-    relations, nobs, nvar, obs_names, var_names,
+    relations, source_ids, destination_ids, nobs, nvar, obs_names, var_names,
     annotate,
     # Analysis
     analyze, distances,
     PointDensity, density, ShapeColorView,
     # I/O
-    SpatialDataZarr, write!,
+    SpatialDataZarr, native_store_version, write!,
     CosMx
 
 include("coordsystems.jl")
